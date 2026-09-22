@@ -167,6 +167,22 @@ class SFTPHandle(ClosingContextManager):
         """
         return SFTP_OP_UNSUPPORTED
 
+    def fsync(self):
+        """
+        Flush all data written to this open file out to stable storage.
+        This is the server-side handler for the ``fsync@openssh.com``
+        protocol extension.
+
+        The default implementation returns ``SFTP_OP_UNSUPPORTED``; subclass
+        and override to actually sync the underlying file (e.g. via
+        ``os.fsync``).
+
+        :return: an `int` error code like ``SFTP_OK``.
+
+        .. versionadded:: 5.1
+        """
+        return SFTP_OP_UNSUPPORTED
+
     # ...internals...
 
     def _set_files(self, files):

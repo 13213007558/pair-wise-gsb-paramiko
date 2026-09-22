@@ -135,6 +135,10 @@ class BaseSFTP:
         self.logger = util.get_logger("paramiko.sftp")
         self.sock = None
         self.ultra_debug = False
+        # extensions advertised by the peer in its VERSION packet, as a dict
+        # of extension name (str) to extension data (bytes).  only populated
+        # in client mode (via _send_version).
+        self.server_extensions = {}
 
     # ...internals...
 
@@ -148,7 +152,18 @@ class BaseSFTP:
         version = struct.unpack(">I", data[:4])[0]
         #        if version != _VERSION:
         #            raise SFTPError('Incompatible sftp protocol')
+        # parse any extension name/data pairs trailing the version number
+        ext_data = data[4:]
+        msg = Message(ext_data)
+        while msg.packet.tell() < len(ext_data):
+            name = msg.get_text()
+            self.server_extensions[name] = msg.get_string()
         return version
+
+    def _get_server_extension_pairs(self):
+        # extension name/data pairs to advertise in server mode; subclasses
+        # (i.e. SFTPServer) may extend this.
+        return ["check-file", "md5,sha1"]
 
     def _send_server_version(self):
         # winscp will freak out if the server sends version info before the
@@ -157,8 +172,7 @@ class BaseSFTP:
         if t != CMD_INIT:
             raise SFTPError("Incompatible sftp protocol")
         version = struct.unpack(">I", data[:4])[0]
-        # advertise that we support "check-file"
-        extension_pairs = ["check-file", "md5,sha1"]
+        extension_pairs = self._get_server_extension_pairs()
         msg = Message()
         msg.add_int(_VERSION)
         msg.add(*extension_pairs)

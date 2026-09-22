@@ -52,6 +52,13 @@ class StubSFTPHandle(SFTPHandle):
         except OSError as e:
             return SFTPServer.convert_errno(e.errno)
 
+    def fsync(self):
+        try:
+            os.fsync(self.readfile.fileno())
+            return SFTP_OK
+        except OSError as e:
+            return SFTPServer.convert_errno(e.errno)
+
     def chattr(self, attr):
         # python doesn't have equivalents to fchown or fchmod, so we have to
         # use the stored filename
@@ -67,6 +74,10 @@ class StubSFTPServer(SFTPServerInterface):
     # (the tests always create and eventually delete a subfolder, so there
     # shouldn't be any mess)
     ROOT = os.getcwd()
+
+    # handle class created by open(); tests may subclass and override to
+    # inject faults.
+    HANDLE_CLASS = StubSFTPHandle
 
     def _realpath(self, path):
         return self.ROOT + self.canonicalize(path)
@@ -134,7 +145,7 @@ class StubSFTPServer(SFTPServerInterface):
             f = os.fdopen(fd, fstr)
         except OSError as e:
             return SFTPServer.convert_errno(e.errno)
-        fobj = StubSFTPHandle(flags)
+        fobj = self.HANDLE_CLASS(flags)
         fobj.filename = path
         fobj.readfile = f
         fobj.writefile = f

@@ -75,6 +75,20 @@ class SFTPFile(BufferedFile):
     def __del__(self):
         self._close(async_=True)
 
+    def _drain_write_requests(self):
+        """
+        Wait for all outstanding (pipelined) write requests to be
+        acknowledged by the server, raising any error the server reported
+        for them.  Does nothing when all writes have already been
+        acknowledged (e.g. when pipelining is off).
+        """
+        while self._reqs:
+            req = self._reqs.popleft()
+            t, msg = self.sftp._read_response(req)
+            if t != CMD_STATUS:
+                raise SFTPError("Expected status")
+            # convert_status already called by _read_response
+
     def close(self):
         """
         Close the file.
@@ -414,6 +428,37 @@ class SFTPFile(BufferedFile):
         msg.get_text()  # alg
         data = msg.get_remainder()
         return data
+
+    def fsync(self):
+        """
+        Ask the server to force all data written to this open file out to
+        stable storage, using the ``fsync@openssh.com`` protocol extension.
+
+        Any locally buffered or pipelined write requests are flushed first,
+        so when this method returns successfully, all data written so far is
+        persisted on the server (as far as the server can guarantee).
+
+        .. note::
+            This only covers the file's contents; it does **not** guarantee
+            that the file's directory entry (its name) survives a server
+            power loss.  Durability of directory entries requires syncing
+            the containing directory, which is out of scope here.
+
+        :raises:
+            ``IOError`` -- if the server does not support the
+            ``fsync@openssh.com`` extension, or the fsync itself fails
+
+        .. versionadded:: 5.1
+        """
+        # make sure all written data has actually reached the server before
+        # asking it to persist anything
+        self.flush()
+        self._drain_write_requests()
+        t, msg = self.sftp._request(
+            CMD_EXTENDED, "fsync@openssh.com", self.handle
+        )
+        if t != CMD_STATUS:
+            raise SFTPError("Expected status")
 
     def set_pipelined(self, pipelined=True):
         """

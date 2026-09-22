@@ -26,6 +26,7 @@ import time
 import weakref
 from paramiko import util
 from paramiko.channel import Channel
+from paramiko.file import BufferedFile
 from paramiko.message import Message
 from paramiko.common import INFO, DEBUG, o777
 from paramiko.sftp import (
@@ -85,6 +86,22 @@ def _to_unicode(s):
 
 
 b_slash = b"/"
+
+
+class PublishStateUnknownError(SSHException):
+    """
+    Raised by `.SFTPClient.putfo_atomic` when the connection dropped after
+    the final rename request was sent, so it cannot be determined whether
+    the target file was actually replaced.
+
+    The publish is never retried automatically (the input stream cannot be
+    replayed) and the target is never deleted; callers must verify the
+    remote state themselves before deciding how to proceed.
+
+    .. versionadded:: 5.1
+    """
+
+    pass
 
 
 class SFTPClient(BaseSFTP, ClosingContextManager):
@@ -757,6 +774,205 @@ class SFTPClient(BaseSFTP, ClosingContextManager):
         file_size = os.stat(localpath).st_size
         with open(localpath, "rb") as fl:
             return self.putfo(fl, remotepath, file_size, callback, confirm)
+
+    def putfo_atomic(self, fl, remotepath, callback=None, fsync=False):
+        """
+        Upload the contents of an open file object (``fl``) and atomically
+        publish them as ``remotepath``, so that concurrent readers only
+        ever see the complete old or the complete new contents of the file.
+
+        The data is first streamed to a temporary file in the same directory
+        as ``remotepath`` (created exclusively, so a name collision can
+        never clobber someone else's file; the total size does not need to
+        be known in advance), and then published with a single atomic
+        ``posix-rename@openssh.com`` request.  No delete+rename fallback
+        is used: if the server does not advertise the required extensions,
+        `SFTPError` is raised *before* the (possibly non-replayable) input
+        stream is consumed.
+
+        Two modes are available:
+
+        - default (``fsync=False``): plain atomic replace.
+        - ``fsync=True``: the temporary file's contents are persisted to
+          stable storage via the ``fsync@openssh.com`` extension before
+          the replace happens.  Note that syncing the file does **not**
+          guarantee that its directory entry survives a server power loss;
+          syncing the containing directory is left to the caller.
+
+        If the upload, fsync, or close of the temporary file fails, the old
+        target remains untouched and only the temporary file created by this
+        call is removed (on a best-effort basis).  Exceptions raised by
+        ``callback`` are handled the same way, as they occur during the
+        upload phase.
+
+        If the connection drops after the rename request was sent, the
+        publish state is unknown: `PublishStateUnknownError` is raised and
+        nothing is retransmitted or deleted.
+
+        Directory syncing and upload resumption are out of scope; this
+        method publishes a single file exactly once.
+
+        :param fl: opened file or file-like object to copy
+        :param str remotepath: the destination path on the SFTP server
+        :param callable callback:
+            optional callback function (form: ``func(int, int)``) that
+            accepts the bytes transferred so far and the total bytes to be
+            transferred (the total is always 0, as the size of a stream is
+            generally unknown)
+        :param bool fsync:
+            whether to require the file contents to be persisted on the
+            server (via ``fsync@openssh.com``) before the atomic replace
+        :return: the number of bytes published
+
+        :raises SFTPError:
+            if the server does not advertise the required extensions
+        :raises PublishStateUnknownError:
+            if the connection dropped after the rename request was sent
+        :raises IOError: if the upload otherwise fails
+
+        .. versionadded:: 5.1
+        """
+        remotepath = self._adjust_cwd(remotepath)
+        # verify server capabilities before consuming the (potentially
+        # non-replayable) input stream
+        self._require_extension("posix-rename@openssh.com")
+        if fsync:
+            self._require_extension("fsync@openssh.com")
+        temppath, fr = self._open_temp_file(remotepath)
+        try:
+            fr.set_pipelined(True)
+            size = self._transfer_with_callback(
+                reader=fl, writer=fr, file_size=0, callback=callback
+            )
+            if fsync:
+                # flushes any buffered/pipelined writes internally
+                fr.fsync()
+            self._close_checked(fr)
+        except Exception:
+            # the publish never happened, so the old target (if any) is
+            # still intact; clean up only the temp file created by this
+            # call.
+            self._cleanup_temp_file(fr, temppath)
+            raise
+        # publish: a single atomic rename request.  the send and wait
+        # phases are separated so that a definitive refusal (an SFTP status
+        # error) can be told apart from a lost connection (outcome unknown).
+        self._log(
+            DEBUG, "posix_rename({!r}, {!r})".format(temppath, remotepath)
+        )
+        try:
+            num = self._async_request(
+                type(None),
+                CMD_EXTENDED,
+                "posix-rename@openssh.com",
+                temppath,
+                remotepath,
+            )
+        except Exception as e:
+            # the request may have been sent only partially; conservatively
+            # treat the publish state as unknown.
+            raise PublishStateUnknownError(
+                "connection lost while sending rename request; publish "
+                "state of {!r} is unknown".format(u(remotepath))
+            ) from e
+        try:
+            self._read_response(num)
+        except (SSHException, EOFError) as e:
+            # the connection dropped after the rename request was sent, so
+            # the rename may or may not have happened; do not retry or
+            # delete anything.
+            raise PublishStateUnknownError(
+                "connection lost after rename request was sent; publish "
+                "state of {!r} is unknown".format(u(remotepath))
+            ) from e
+        except OSError as e:
+            # _convert_status raises plain IOError instances for
+            # server-reported status errors; anything fancier (timeouts,
+            # connection resets, ...) means the outcome is genuinely
+            # unknown.
+            if type(e) is not OSError:
+                raise PublishStateUnknownError(
+                    "connection lost after rename request was sent; "
+                    "publish state of {!r} is unknown".format(u(remotepath))
+                ) from e
+            # the server definitively refused the rename, so the target is
+            # untouched and the temp file is still ours to remove.
+            self._cleanup_temp_file(None, temppath)
+            raise
+        return size
+
+    def _require_extension(self, name):
+        if name not in self.server_extensions:
+            raise SFTPError(
+                "Server does not advertise support for the {!r} "
+                "extension".format(name)
+            )
+
+    def _open_temp_file(self, remotepath):
+        """
+        Open a new, exclusively-created temporary file in the same directory
+        as ``remotepath`` (which must already be cwd-adjusted), returning
+        the temp path and the open `.SFTPFile`.
+        """
+        dirname, sep, basename = remotepath.rpartition(b_slash)
+        prefix = dirname + sep
+        last_error = None
+        for _ in range(100):
+            temppath = b"".join(
+                [prefix, b".", basename, b".", hexlify(os.urandom(8)), b".tmp"]
+            )
+            try:
+                return temppath, self.open(temppath, "wx")
+            except IOError as e:
+                # a name collision (the create is exclusive) surfaces as a
+                # generic IOError on most servers; retry with a fresh random
+                # name, but don't mask definite errors like permissions.
+                if e.errno not in (None, errno.EEXIST):
+                    raise
+                last_error = e
+        raise SFTPError(
+            "Unable to create a temporary file for {!r}: {}".format(
+                u(remotepath), last_error
+            )
+        )
+
+    def _close_checked(self, fr):
+        """
+        Close ``fr`` like `.SFTPFile.close`, but propagate errors from
+        the CLOSE request instead of swallowing them.
+        """
+        if fr._closed:
+            return
+        # make sure all pipelined writes were acknowledged (and raise any
+        # error they caused) before closing
+        fr._drain_write_requests()
+        # flushes any buffered data and marks the file closed, so the handle
+        # is not closed a second time from __del__
+        BufferedFile.close(fr)
+        # the flush above may have sent more (pipelined) write requests
+        fr._drain_write_requests()
+        self._request(CMD_CLOSE, fr.handle)
+
+    def _cleanup_temp_file(self, fr, temppath):
+        """
+        Best-effort cleanup after a failed publish: close the temp file
+        handle (if still open) and remove the temp file created by this
+        call.  The publish target is never touched.
+        """
+        if fr is not None:
+            try:
+                fr._close(async_=True)
+            except Exception:
+                pass
+        try:
+            self.remove(temppath)
+        except Exception as e:
+            self._log(
+                DEBUG,
+                "Unable to remove temporary file {!r}: {}".format(
+                    u(temppath), e
+                ),
+            )
 
     def getfo(
         self,

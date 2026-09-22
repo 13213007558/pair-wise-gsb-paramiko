@@ -124,6 +124,22 @@ class SFTPServer(BaseSFTP, SubsystemHandler):
         self.folder_table = {}
         self.server = sftp_si(server, *args, **kwargs)
 
+    def _get_server_extension_pairs(self):
+        pairs = super()._get_server_extension_pairs()
+        # only advertise posix-rename if the server interface actually
+        # implements it (the default just returns SFTP_OP_UNSUPPORTED)
+        if (
+            type(self.server).posix_rename
+            is not SFTPServerInterface.posix_rename
+        ):
+            pairs += ["posix-rename@openssh.com", "1"]
+        # the fsync extension is dispatched to SFTPHandle.fsync, whose
+        # default implementation may still answer SFTP_OP_UNSUPPORTED at
+        # request time; handles are created dynamically by the interface's
+        # open() so support cannot be determined statically here.
+        pairs += ["fsync@openssh.com", "1"]
+        return pairs
+
     def _log(self, level, msg):
         if issubclass(type(msg), list):
             for m in msg:
@@ -390,9 +406,13 @@ class SFTPServer(BaseSFTP, SubsystemHandler):
                 self._send_status(request_number, SFTP_OK)
                 return
             if handle in self.file_table:
-                self.file_table[handle].close()
+                status = self.file_table[handle].close()
                 del self.file_table[handle]
-                self._send_status(request_number, SFTP_OK)
+                # handle.close() implementations historically return None;
+                # only honor an explicit SFTP status code.
+                if not isinstance(status, int):
+                    status = SFTP_OK
+                self._send_status(request_number, status)
                 return
             self._send_status(
                 request_number, SFTP_BAD_MESSAGE, "Invalid handle"
@@ -528,6 +548,16 @@ class SFTPServer(BaseSFTP, SubsystemHandler):
                 newpath = msg.get_text()
                 self._send_status(
                     request_number, self.server.posix_rename(oldpath, newpath)
+                )
+            elif tag == "fsync@openssh.com":
+                handle = msg.get_binary()
+                if handle not in self.file_table:
+                    self._response(
+                        request_number, SFTP_BAD_MESSAGE, "Invalid handle"
+                    )
+                    return
+                self._send_status(
+                    request_number, self.file_table[handle].fsync()
                 )
             else:
                 self._send_status(request_number, SFTP_OP_UNSUPPORTED)

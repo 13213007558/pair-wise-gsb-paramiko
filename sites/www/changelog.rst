@@ -2,6 +2,22 @@
 Changelog
 =========
 
+- :feature:`-` Added `SFTPClient.putfo_atomic
+  <paramiko.sftp_client.SFTPClient.putfo_atomic>`, an "upload-and-publish"
+  API which streams data to a temporary file and then atomically replaces
+  the target via the ``posix-rename@openssh.com`` extension, with an
+  optional ``fsync=True`` mode (requiring ``fsync@openssh.com``) that
+  persists the file contents before the replace.  Server support for the
+  required extensions is verified before the input stream is consumed, and
+  a lost connection during the final rename raises the new
+  `paramiko.sftp_client.PublishStateUnknownError` instead of retrying.
+- :feature:`-` Added `SFTPFile.fsync <paramiko.sftp_file.SFTPFile.fsync>`
+  plus server-side support for the ``fsync@openssh.com`` extension
+  (`SFTPHandle.fsync <paramiko.sftp_handle.SFTPHandle.fsync>`), and
+  `SFTPServer <paramiko.sftp_server.SFTPServer>` now advertises supported
+  extensions (``posix-rename@openssh.com``, ``fsync@openssh.com``) in its
+  version handshake; `SFTPClient <paramiko.sftp_client.SFTPClient>` records
+  server-advertised extensions in ``server_extensions``.
 - :feature:`-` Added support for the ``mlkem768x25519-sha256`` post-quantum
   hybrid key exchange method described in
   ``draft-ietf-sshm-mlkem-hybrid-kex``. It pairs ML-KEM-768 (FIPS 203) with
