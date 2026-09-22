@@ -8,7 +8,7 @@ Replaces certain parts of `.SSHClient`. For a concrete implementation, see the
 from collections import namedtuple
 
 from .agent import AgentKey
-from .ssh_exception import AuthenticationException
+from .ssh_exception import AuthenticationException, PartialAuthentication
 from .util import get_logger
 
 
@@ -20,6 +20,12 @@ class AuthSource:
 
     All implementations must accept at least a ``username`` (``str``) kwarg.
     """
+
+    #: The SSH authentication method name (eg ``"publickey"``) this source
+    #: implements, or ``None`` if unknown/unspecified. Used by
+    #: `.AuthStrategy` to match sources against server-reported allowed
+    #: methods.
+    method = None
 
     def __init__(self, username):
         self.username = username
@@ -46,6 +52,8 @@ class NoneAuth(AuthSource):
     Auth type "none", ie https://www.rfc-editor.org/rfc/rfc4252#section-5.2 .
     """
 
+    method = "none"
+
     def authenticate(self, transport):
         return transport.auth_none(self.username)
 
@@ -65,6 +73,8 @@ class Password(AuthSource):
         in a variable).
     """
 
+    method = "password"
+
     def __init__(self, username, password_getter):
         super().__init__(username=username)
         self.password_getter = password_getter
@@ -79,6 +89,40 @@ class Password(AuthSource):
         # TODO: be nice to log source _of_ the password?
         password = self.password_getter()
         return transport.auth_password(self.username, password)
+
+
+class KeyboardInteractive(AuthSource):
+    """
+    Keyboard-interactive authentication (RFC 4256), eg for 2FA challenges.
+
+    :param callable handler:
+        A callable of the form ``handler(title, instructions, prompt_list)``
+        which returns a list of string answers, exactly as documented for
+        `.Transport.auth_interactive`. ``prompt_list`` is a list of
+        ``(prompt, echo)`` tuples; the ``echo`` flag indicates whether the
+        answer may be visibly echoed to the user.
+
+        The handler is called once per challenge round, so multi-round
+        authentication is supported. It is only ever called when the server
+        actually issues a challenge, making it safe to wrap lazy secret
+        retrieval (user prompts, secrets-store calls, etc).
+
+    .. note::
+        Answers are passed straight through to the transport and are never
+        stored on this object, so they cannot leak into ``repr`` or logs.
+    """
+
+    method = "keyboard-interactive"
+
+    def __init__(self, username, handler):
+        super().__init__(username=username)
+        self.handler = handler
+
+    def __repr__(self):
+        return super()._repr(user=self.username)
+
+    def authenticate(self, transport):
+        return transport.auth_interactive(self.username, self.handler)
 
 
 # TODO (backwards incompat): twiddle this, or PKey, or both, so they're more
@@ -98,6 +142,8 @@ class PrivateKey(AuthSource):
     either in their ``__init__``, or in an overridden ``authenticate`` prior to
     its `super` call.
     """
+
+    method = "publickey"
 
     def authenticate(self, transport):
         return transport.auth_publickey(self.username, self.pkey)
@@ -265,44 +311,82 @@ class AuthStrategy:
 
         You *normally* won't need to override this, but it's an option for
         advanced users.
+
+        Sources are tried in order, but filtered by what the server reports
+        as allowable: when an attempt ends in partial authentication (a
+        non-empty list of method names), only sources whose `method` appears
+        in that list are tried next, and factors which already completed are
+        not retried. Ordinary credential failures
+        (`.AuthenticationException`) are recorded and the next source is
+        tried; anything else (protocol errors, connection loss, bugs in
+        user callbacks) propagates uncaught.
+
+        Authentication only counts as successful once the `transport`
+        itself confirms it (ie `.Transport.is_authenticated`).
         """
-        succeeded = False
         overall_result = AuthResult(strategy=self)
         # TODO: arguably we could fit in a "send none auth, record allowed auth
         # types sent back" thing here as OpenSSH-client does, but that likely
         # wants to live in fabric.OpenSSHAuthStrategy as not all target servers
         # will implement it!
         # TODO: needs better "server told us too many attempts" checking!
+        # Server-reported methods allowed to continue auth; None = no info.
+        allowed = None
+        # Methods which already succeeded as one factor of a multi-factor
+        # auth; retrying them would be meaningless.
+        completed = set()
         for source in self.get_sources():
+            method = getattr(source, "method", None)
+            if method is not None:
+                if method in completed:
+                    self.log.debug(
+                        f"Skipping {source}: {method!r} already completed"
+                    )
+                    continue
+                if allowed is not None and method not in allowed:
+                    self.log.debug(
+                        f"Skipping {source}: server only allows {allowed!r}"
+                    )
+                    continue
             self.log.debug(f"Trying {source}")
             try:  # NOTE: this really wants to _only_ wrap the authenticate()!
                 result = source.authenticate(transport)
-                succeeded = True
-            # TODO: 'except PartialAuthentication' is needed for 2FA and
-            # similar, as per old SSHClient.connect - it is the only way
-            # AuthHandler supplies access to the 'name-list' field from
-            # MSG_USERAUTH_FAILURE, at present.
-            except Exception as e:
-                result = e
-                # TODO: look at what this could possibly raise, we don't really
-                # want Exception here, right? just SSHException subclasses? or
-                # do we truly want to capture anything at all with assumption
-                # it's easy enough for users to look afterwards?
+            except PartialAuthentication as e:
+                # 2FA and similar, as per old SSHClient.connect. Normally
+                # AuthHandler translates this into a returned name-list, but
+                # handle it here too for robustness.
+                result = list(e.allowed_types)
+            except AuthenticationException as e:
+                # Ordinary credential failure: record it, then try whatever
+                # source the strategy yields next. (Anything else - protocol
+                # errors, connection loss, bugs in user callbacks - is
+                # allowed to propagate, as it is not an auth failure.)
                 # NOTE: showing type, not message, for tersity & also most of
                 # the time it's basically just "Authentication failed."
                 source_class = e.__class__.__name__
                 self.log.info(
                     f"Authentication via {source} failed with {source_class}"
                 )
+                overall_result.append(SourceResult(source, e))
+                continue
             overall_result.append(SourceResult(source, result))
-            if succeeded:
-                break
+            # A non-empty list means partial authentication: the server is
+            # telling us which methods may continue the session.
+            if isinstance(result, list) and len(result) > 0:
+                if method is not None:
+                    completed.add(method)
+                allowed = list(result)
+                self.log.debug(
+                    f"Partial auth via {source}; server now allows {allowed!r}"
+                )
+                continue
+            # Anything else (typically an empty list) claims success, but
+            # only the Transport itself gets the final say.
+            if transport.is_authenticated():
+                return overall_result
         # Gotta die here if nothing worked, otherwise Transport's main loop
         # just kinda hangs out until something times out!
-        if not succeeded:
-            raise AuthFailure(result=overall_result)
-        # Success: give back what was done, in case they care.
-        return overall_result
+        raise AuthFailure(result=overall_result)
 
     # TODO: is there anything OpenSSH client does which _can't_ cleanly map to
     # iterating a generator?

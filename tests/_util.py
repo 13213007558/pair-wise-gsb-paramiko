@@ -89,6 +89,11 @@ class TestServer(ServerInterface):
     paranoid_did_password = False
     paranoid_did_public_key = False
     paranoid_key = Ed25519Key.from_private_key_file(_support("ed25519.key"))
+    multifactor_did_public_key = False
+    multifactor_interactive_challenges = 0
+    multifactor_key = Ed25519Key.from_private_key_file(
+        _support("ed25519.key")
+    )
 
     def __init__(self, allowed_keys=None):
         self.allowed_keys = allowed_keys if allowed_keys is not None else []
@@ -157,6 +162,10 @@ class TestServer(ServerInterface):
                 return "password"
         if username == "commie":
             return "keyboard-interactive"
+        if username == "multifactor":
+            if self.multifactor_did_public_key:
+                return "keyboard-interactive"
+            return "publickey"
         if username == "utf8":
             return "password"
         if username == "non-utf8":
@@ -190,6 +199,10 @@ class TestServer(ServerInterface):
             if self.paranoid_did_password:
                 return AUTH_SUCCESSFUL
             return AUTH_PARTIALLY_SUCCESSFUL
+        if (username == "multifactor") and (key == self.multifactor_key):
+            # publickey is only the first factor here
+            self.multifactor_did_public_key = True
+            return AUTH_PARTIALLY_SUCCESSFUL
         # TODO: make sure all tests incidentally using this to pass, _without
         # sending a username oops_, get updated somehow - probably via server()
         # default always injecting a username
@@ -203,10 +216,19 @@ class TestServer(ServerInterface):
             return InteractiveQuery(
                 "password", "Please enter a password.", ("Password", False)
             )
+        if username == "multifactor" and self.multifactor_did_public_key:
+            self.username = username
+            self.multifactor_interactive_challenges += 1
+            return InteractiveQuery(
+                "password", "Please enter a password.", ("Password", False)
+            )
         return AUTH_FAILED
 
     def check_auth_interactive_response(self, responses):
         if self.username == "commie":
+            if (len(responses) == 1) and (responses[0] == "cat"):
+                return AUTH_SUCCESSFUL
+        if self.username == "multifactor":
             if (len(responses) == 1) and (responses[0] == "cat"):
                 return AUTH_SUCCESSFUL
         return AUTH_FAILED
