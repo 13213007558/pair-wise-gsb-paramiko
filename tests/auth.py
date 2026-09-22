@@ -5,7 +5,7 @@ Thus, they concern AuthHandler and AuthStrategy, with a side of Transport.
 """
 
 from logging import Logger
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 from pytest import raises
 
@@ -19,14 +19,22 @@ from paramiko import (
     BadAuthenticationType,
     Ed25519Key,
     InMemoryPrivateKey,
+    InteractiveQuery,
+    KeyboardInteractive,
     NoneAuth,
     OnDiskPrivateKey,
     Password,
     PKey,
     PrivateKey,
     RSAKey,
+    ServerInterface,
     SourceResult,
     SSHException,
+)
+from paramiko.common import (
+    AUTH_FAILED,
+    AUTH_PARTIALLY_SUCCESSFUL,
+    AUTH_SUCCESSFUL,
 )
 
 from ._util import (
@@ -281,6 +289,58 @@ class AuthSource_:
             trans.auth_publickey.assert_called_once_with("foo", source.pkey)
             assert result is trans.auth_publickey.return_value
 
+    class KeyboardInteractive_:
+        def init_takes_and_stores_secret_getter(self):
+            with raises(TypeError):
+                KeyboardInteractive("foo")
+            getter = Mock()
+            ki = KeyboardInteractive("foo", secret_getter=getter)
+            assert ki.secret_getter is getter
+
+        def repr_shows_username_but_never_secret_material(self):
+            getter = Mock(return_value="super-secret")
+            ki = KeyboardInteractive("foo", secret_getter=getter)
+            assert repr(ki) == "KeyboardInteractive(user='foo')"
+            assert "super-secret" not in repr(ki)
+
+        def authenticate_calls_auth_interactive_with_username(self):
+            trans = Mock()
+            result = KeyboardInteractive("foo", Mock()).authenticate(trans)
+            assert trans.auth_interactive.call_count == 1
+            assert trans.auth_interactive.call_args[0][0] == "foo"
+            assert result is trans.auth_interactive.return_value
+
+        def getter_not_called_when_server_issues_no_challenge(self):
+            getter = Mock()
+            # Mock transport never invokes the handler, simulating a server
+            # which accepts/rejects without sending any challenge.
+            KeyboardInteractive("foo", getter).authenticate(Mock())
+            getter.assert_not_called()
+
+        def handler_answers_each_prompt_preserving_echo_flags(self):
+            getter = Mock(side_effect=["answer1", "answer2"])
+            trans = Mock()
+            KeyboardInteractive("foo", getter).authenticate(trans)
+            handler = trans.auth_interactive.call_args[0][1]
+            answers = handler(
+                "title",
+                "instructions",
+                [("Password", False), ("Token", True)],
+            )
+            assert answers == ["answer1", "answer2"]
+            assert getter.call_args_list == [
+                call("Password", False),
+                call("Token", True),
+            ]
+
+        def handler_supports_multiple_challenge_rounds(self):
+            getter = Mock(side_effect=["round1", "round2"])
+            trans = Mock()
+            KeyboardInteractive("foo", getter).authenticate(trans)
+            handler = trans.auth_interactive.call_args[0][1]
+            assert handler("t", "i", [("First", False)]) == ["round1"]
+            assert handler("t", "i", [("Second", True)]) == ["round2"]
+
     class InMemoryPrivateKey_:
         def init_takes_pkey_object(self):
             with raises(TypeError):
@@ -444,7 +504,8 @@ class AuthStrategy_:
 
         def raises_AuthFailure_if_no_successes(self):
             self.strat.log = Mock()
-            oops = Exception("onoz")
+            self.transport.is_authenticated.return_value = False
+            oops = AuthenticationException("onoz")
             self.source.authenticate.side_effect = oops
             with raises(AuthFailure) as info:
                 self.strat.authenticate(self.transport)
@@ -456,7 +517,7 @@ class AuthStrategy_:
             assert source_res.source is self.source
             assert source_res.result is oops
             self.strat.log.info.assert_called_once_with(
-                "Authentication via NoneAuth() failed with Exception"
+                "Authentication via NoneAuth() failed with AuthenticationException"  # noqa
             )
 
         def short_circuits_on_successful_auth(self):
@@ -468,3 +529,186 @@ class AuthStrategy_:
             # And it did not capture any attempt to execute the 2nd source
             assert len(result) == 1
             assert result[0].source is self.source
+
+        def continues_past_partial_auth_to_next_allowed_source(self):
+            # Regression: a source returning a non-empty method list (ie a
+            # partial auth, as with 2FA) used to end the run entirely,
+            # leaving the Transport unauthenticated.
+            self.source.authenticate.return_value = ["keyboard-interactive"]
+            second = KeyboardInteractive("foo", secret_getter=Mock())
+            second.authenticate = Mock(return_value=[])
+            self.strat.get_sources.return_value = [self.source, second]
+            self.transport.is_authenticated.side_effect = [False, True, True]
+            result = self.strat.authenticate(self.transport)
+            second.authenticate.assert_called_once_with(self.transport)
+            assert len(result) == 2
+            assert result[0].result == ["keyboard-interactive"]
+            assert result[1].result == []
+
+        def skips_sources_whose_method_server_no_longer_allows(self):
+            self.source.authenticate.return_value = ["keyboard-interactive"]
+            skipped = Password("foo", password_getter=Mock())
+            skipped.authenticate = Mock()
+            allowed = KeyboardInteractive("foo", secret_getter=Mock())
+            allowed.authenticate = Mock(return_value=[])
+            self.strat.get_sources.return_value = [
+                self.source,
+                skipped,
+                allowed,
+            ]
+            self.transport.is_authenticated.side_effect = [False, True, True]
+            result = self.strat.authenticate(self.transport)
+            skipped.authenticate.assert_not_called()
+            allowed.authenticate.assert_called_once_with(self.transport)
+            # Skipped sources are not recorded as real attempts
+            assert len(result) == 2
+
+        def does_not_meaninglessly_retry_completed_factors(self):
+            first = InMemoryPrivateKey("foo", Mock())
+            first.authenticate = Mock(
+                return_value=["publickey", "password"]
+            )
+            retry = InMemoryPrivateKey("foo", Mock())
+            retry.authenticate = Mock()
+            pw = Password("foo", Mock())
+            pw.authenticate = Mock(return_value=[])
+            self.strat.get_sources.return_value = [first, retry, pw]
+            self.transport.is_authenticated.side_effect = [False, True, True]
+            self.strat.authenticate(self.transport)
+            # publickey already succeeded as a factor; not tried again
+            retry.authenticate.assert_not_called()
+            pw.authenticate.assert_called_once_with(self.transport)
+
+        def credential_failure_continues_to_next_source(self):
+            oops = AuthenticationException("bad password")
+            self.source.authenticate.side_effect = oops
+            second = Password("foo", Mock())
+            second.authenticate = Mock(return_value=[])
+            self.strat.get_sources.return_value = [self.source, second]
+            result = self.strat.authenticate(self.transport)
+            second.authenticate.assert_called_once_with(self.transport)
+            assert len(result) == 2
+            assert result[0].result is oops
+            assert result[1].result == []
+
+        def partial_auth_without_eventual_success_raises_AuthFailure(self):
+            self.source.authenticate.return_value = ["keyboard-interactive"]
+            self.transport.is_authenticated.return_value = False
+            with raises(AuthFailure) as info:
+                self.strat.authenticate(self.transport)
+            result = info.value.result
+            assert len(result) == 1
+            assert result[0].result == ["keyboard-interactive"]
+
+        def programming_errors_in_callbacks_do_not_look_like_auth_failure(
+            self,
+        ):
+            getter = Mock(side_effect=TypeError("bug in user code"))
+            self.strat.get_sources.return_value = [
+                Password("foo", password_getter=getter)
+            ]
+            with raises(TypeError):
+                self.strat.authenticate(self.transport)
+
+        def protocol_errors_propagate_untouched(self):
+            self.source.authenticate.side_effect = SSHException("wah")
+            with raises(SSHException) as info:
+                self.strat.authenticate(self.transport)
+            assert not isinstance(info.value, AuthenticationException)
+
+        def connection_closed_mid_auth_is_not_a_credential_failure(self):
+            oops = AuthenticationException(
+                "Authentication failed: transport shut down or saw EOF"
+            )
+            self.source.authenticate.side_effect = oops
+            self.transport.is_active.return_value = False
+            with raises(AuthenticationException) as info:
+                self.strat.authenticate(self.transport)
+            # The original exception propagates; it is not wrapped up as an
+            # overall auth failure.
+            assert info.value is oops
+
+
+class TwoFactorServer(ServerInterface):
+    """
+    Server demanding publickey, then a keyboard-interactive password round.
+    """
+
+    def __init__(self, secret):
+        self.secret = secret
+        self.did_publickey = False
+        self.interactive_challenges = 0
+        self.interactive_responses = 0
+
+    def get_allowed_auths(self, username):
+        if self.did_publickey:
+            return "keyboard-interactive"
+        return "publickey,keyboard-interactive"
+
+    def check_auth_publickey(self, username, key):
+        if self.did_publickey:
+            return AUTH_FAILED
+        self.did_publickey = True
+        return AUTH_PARTIALLY_SUCCESSFUL
+
+    def check_auth_interactive(self, username, submethods):
+        if not self.did_publickey:
+            return AUTH_FAILED
+        self.interactive_challenges += 1
+        return InteractiveQuery(
+            "2fa", "Second factor required", ("Password", False)
+        )
+
+    def check_auth_interactive_response(self, responses):
+        self.interactive_responses += 1
+        if responses == [self.secret]:
+            return AUTH_SUCCESSFUL
+        return AUTH_FAILED
+
+
+class AuthStrategy_two_factor:
+    """
+    AuthStrategy over a live Transport against a local 2FA ServerInterface.
+    """
+
+    def _strategy(self, getter):
+        key = Ed25519Key.from_private_key_file(_support("ed25519.key"))
+        strat = AuthStrategy(None)
+        strat.get_sources = Mock(
+            return_value=[
+                InMemoryPrivateKey("twofactor", key),
+                KeyboardInteractive("twofactor", getter),
+            ]
+        )
+        return strat
+
+    def publickey_then_challenge_success(self):
+        srv = TwoFactorServer(secret="s3cret")
+        getter = Mock(return_value="s3cret")
+        with server(defer=True, server_interface=srv) as (tc, ts):
+            result = self._strategy(getter).authenticate(tc)
+            assert tc.is_authenticated()
+            # Server really received the second-factor round...
+            assert srv.interactive_challenges == 1
+            assert srv.interactive_responses == 1
+            # ...and the getter was only called to answer that challenge
+            getter.assert_called_once_with("Password", False)
+            assert len(result) == 2
+            assert result[0].result == ["keyboard-interactive"]
+            assert result[1].result == []
+
+    def publickey_then_challenge_rejected(self):
+        srv = TwoFactorServer(secret="s3cret")
+        getter = Mock(return_value="wrong")
+        with server(defer=True, server_interface=srv) as (tc, ts):
+            with raises(AuthFailure) as info:
+                self._strategy(getter).authenticate(tc)
+            assert not tc.is_authenticated()
+            # Server still received the second-factor round
+            assert srv.interactive_challenges == 1
+            assert srv.interactive_responses == 1
+            # And the failure result reflects both real attempts
+            result = info.value.result
+            assert len(result) == 2
+            assert result[0].result == ["keyboard-interactive"]
+            assert isinstance(result[1].result, AuthenticationException)

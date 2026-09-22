@@ -220,6 +220,7 @@ def server(
     client_init=None,
     connect=None,
     pubkeys=None,
+    server_interface=None,
     catch_error=False,
     transport_factory=None,
     server_transport_factory=None,
@@ -243,8 +244,11 @@ def server(
         Extends and/or overrides ``init`` for client transport only.
     :param connect:
         Kwargs to use for ``connect()`` on the client.
-    :param pubkeys:
-        List of public keys for auth.
+   :param pubkeys:
+       List of public keys for auth.
+    :param server_interface:
+        A ``ServerInterface`` instance to use server-side; when ``None``
+        (the default) a ``TestServer`` is built from ``pubkeys``.
     :param catch_error:
         Whether to capture connection errors & yield from contextmanager.
         Necessary for connection_time exception testing.
@@ -287,7 +291,8 @@ def server(
         hostkey = RSAKey.from_private_key_file(_support("rsa.key"))
     ts.add_server_key(hostkey)
     event = threading.Event()
-    server = TestServer(allowed_keys=pubkeys)
+    if server_interface is None:
+        server_interface = TestServer(allowed_keys=pubkeys)
     assert not event.is_set()
     assert not ts.is_active()
     assert tc.get_username() is None
@@ -300,7 +305,7 @@ def server(
     # cannot usefully deal with problems at connect time which stem from errors
     # in the server side.
     try:
-        ts.start_server(event, server)
+        ts.start_server(event, server_interface)
         tc.connect(**connect)
 
         event.wait(1.0)

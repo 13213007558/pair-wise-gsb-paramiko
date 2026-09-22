@@ -66,6 +66,7 @@ class UtilTest(unittest.TestCase):
             "Ed25519Key",
             "HostKeys",
             "InMemoryPrivateKey",
+            "KeyboardInteractive",
             "Message",
             "MissingHostKeyPolicy",
             "NoneAuth",

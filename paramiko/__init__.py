@@ -40,6 +40,7 @@ from paramiko.auth_strategy import (
     AuthResult,
     AuthSource,
     InMemoryPrivateKey,
+    KeyboardInteractive,
     NoneAuth,
     OnDiskPrivateKey,
     Password,
