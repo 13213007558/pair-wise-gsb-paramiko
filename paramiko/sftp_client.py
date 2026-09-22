@@ -87,6 +87,25 @@ def _to_unicode(s):
 b_slash = b"/"
 
 
+class PublishStateUnknownError(SSHException):
+    """
+    The connection dropped after an atomic publish's rename request was
+    sent to the server, but before its response was received, so the
+    publish state of the target file cannot be determined: it may hold
+    either the old or the new contents.
+
+    Raised by `.SFTPClient.putfo_atomic`.  No automatic retry or cleanup
+    is attempted in this situation (the upload cannot be replayed safely,
+    and the rename may already have taken effect), so the staging tempfile
+    may still exist next to the target.  Callers should verify the target
+    over a fresh connection and finish or roll back the publish manually.
+
+    .. versionadded:: 5.0
+    """
+
+    pass
+
+
 class SFTPClient(BaseSFTP, ClosingContextManager):
     """
     SFTP client object.
@@ -757,6 +776,202 @@ class SFTPClient(BaseSFTP, ClosingContextManager):
         file_size = os.stat(localpath).st_size
         with open(localpath, "rb") as fl:
             return self.putfo(fl, remotepath, file_size, callback, confirm)
+
+    #: SFTP extension used to atomically overwrite the publish target.
+    POSIX_RENAME_EXTENSION = "posix-rename@openssh.com"
+    #: SFTP extension used to flush the staged tempfile to stable storage.
+    FSYNC_EXTENSION = "fsync@openssh.com"
+
+    def putfo_atomic(self, fl, remotepath, callback=None, fsync=False):
+        """
+        Upload the contents of a file-like object ``fl`` and atomically
+        publish them as ``remotepath``, so that concurrent readers only
+        ever see the complete old or the complete new contents of the
+        target, never a partially uploaded file.
+
+        The upload is staged in a tempfile created (with exclusive-create,
+        to avoid clobbering unrelated files) in the same folder as the
+        target, and then renamed over the target with the
+        ``posix-rename@openssh.com`` extension.  The file size does
+        not need to be known in advance; ``fl`` is simply read until
+        EOF.
+
+        Two modes are available:
+
+        - the default mode stages the upload and atomically replaces the
+          target;
+        - with ``fsync=True``, the staged contents are flushed to
+          stable storage (via the ``fsync@openssh.com`` extension)
+          before the replace happens, so the published contents survive a
+          server crash.  Note that fsync-ing the file does *not* guarantee
+          that the folder entry itself (the rename) is durable across a
+          power loss; syncing the containing folder is left to the caller.
+
+        Both extensions must be advertised by the server, and this is
+        verified *before* ``fl`` is consumed (the stream may not be
+        replayable).  If a required extension is missing, `.SFTPError`
+        is raised and no non-atomic fallback (such as delete+rename) is
+        attempted.
+
+        If the upload, the fsync or the close of the staged tempfile fails,
+        the old target is left untouched and only the tempfile created by
+        this call is removed.  If the connection drops after the rename
+        request has been sent, the publish state can no longer be
+        determined and `PublishStateUnknownError` is raised; nothing
+        is retried or deleted automatically in that case.
+
+        Only a single file publish is handled here: resuming interrupted
+        uploads and syncing the containing folder are left to the caller.
+
+        :param fl: opened file or file-like object to copy
+        :param str remotepath: the destination path on the SFTP server
+        :param callable callback:
+            optional callback function (form: ``func(int, int)``) that
+            accepts the bytes transferred so far and the total bytes to be
+            transferred (always 0 here, since the size is unknown).  An
+            exception raised by the callback aborts the upload stage and is
+            handled like any other upload failure.
+        :param bool fsync:
+            whether to flush the staged file to stable storage before
+            publishing it (requires the ``fsync@openssh.com``
+            extension)
+
+        :return: the number of bytes published
+
+        :raises:
+            `.SFTPError` -- if the server does not advertise the
+            extensions required for the requested mode
+        :raises:
+            `PublishStateUnknownError` -- if the connection dropped
+            after the rename request was sent
+
+        .. versionadded:: 5.0
+        """
+        # check server capabilities before consuming the (possibly
+        # non-replayable) stream
+        if self.POSIX_RENAME_EXTENSION not in self.server_extensions:
+            raise SFTPError(
+                "Server does not support the {} extension; refusing to "
+                "publish {!r} non-atomically".format(
+                    self.POSIX_RENAME_EXTENSION, remotepath
+                )
+            )
+        if fsync and self.FSYNC_EXTENSION not in self.server_extensions:
+            raise SFTPError(
+                "Server does not support the {} extension; cannot "
+                "guarantee a durable publish of {!r}".format(
+                    self.FSYNC_EXTENSION, remotepath
+                )
+            )
+        remotepath = u(remotepath)
+        folder, sep, basename = remotepath.rpartition("/")
+        if len(basename) == 0:
+            raise ValueError(
+                "remotepath must name a file, not a folder: {!r}".format(
+                    remotepath
+                )
+            )
+        # stage the upload in a tempfile next to the target, created with
+        # exclusive-create so we can never clobber an unrelated file
+        staged = None
+        tempname = None
+        error = None
+        for _ in range(10):
+            tempname = self._staging_tempname(folder, sep, basename)
+            try:
+                staged = self.open(tempname, "wx")
+                break
+            except IOError as e:
+                # most likely a name collision; retry with a fresh name
+                error = e
+        if staged is None:
+            raise error
+        # upload; any failure here (including from the callback) leaves the
+        # old target untouched, and only our own tempfile is cleaned up
+        try:
+            size = self._transfer_with_callback(fl, staged, 0, callback)
+            staged.flush()
+            if fsync:
+                self._fsync(staged.handle)
+            staged._close_strict()
+        except BaseException:
+            self._discard_staged_file(staged, tempname)
+            raise
+        # atomically replace the target with the staged tempfile
+        try:
+            num = self._async_request(
+                type(None),
+                CMD_EXTENDED,
+                self.POSIX_RENAME_EXTENSION,
+                tempname,
+                remotepath,
+            )
+        except Exception:
+            # the request was never (fully) sent, so the rename did not
+            # happen and the staged tempfile is still ours to clean up
+            self._discard_staged_file(None, tempname)
+            raise
+        try:
+            self._read_response(num)
+        except SSHException as e:
+            raise PublishStateUnknownError(
+                "Connection dropped after the rename request for {!r} was "
+                "sent; publish state of {!r} is unknown".format(
+                    tempname, remotepath
+                )
+            ) from e
+        except (IOError, EOFError) as e:
+            if self._connection_lost():
+                raise PublishStateUnknownError(
+                    "Connection dropped after the rename request for {!r} "
+                    "was sent; publish state of {!r} is unknown".format(
+                        tempname, remotepath
+                    )
+                ) from e
+            # the server answered with an error status, so the rename was
+            # rejected and the staged tempfile is still ours to clean up
+            self._discard_staged_file(None, tempname)
+            raise
+        return size
+
+    def _staging_tempname(self, folder, sep, basename):
+        # hidden tempfile next to the publish target, with a random suffix
+        token = u(hexlify(os.urandom(8)))
+        return "{}{}.{}.tmp-{}".format(folder, sep, basename, token)
+
+    def _fsync(self, handle):
+        # flush an open remote file handle to stable storage; callers must
+        # check self.server_extensions for FSYNC_EXTENSION support first
+        self._log(DEBUG, "fsync({})".format(u(hexlify(handle))))
+        self._request(CMD_EXTENDED, self.FSYNC_EXTENSION, handle)
+
+    def _discard_staged_file(self, fileobj, tempname):
+        # best-effort cleanup of a tempfile staged by putfo_atomic; only
+        # ever removes the tempfile that call created, never the target
+        if fileobj is not None:
+            try:
+                fileobj.close()
+            except Exception:
+                pass
+        try:
+            self.remove(tempname)
+        except Exception:
+            self._log(
+                DEBUG,
+                "Could not remove staged tempfile {!r}".format(tempname),
+            )
+
+    def _connection_lost(self):
+        if getattr(self.sock, "closed", False):
+            return True
+        get_transport = getattr(self.sock, "get_transport", None)
+        if get_transport is None:
+            return False
+        try:
+            transport = get_transport()
+        except Exception:
+            return True
+        return transport is None or not transport.is_active()
 
     def getfo(
         self,

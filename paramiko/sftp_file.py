@@ -109,6 +109,20 @@ class SFTPFile(BufferedFile):
             # may have outlived the Transport connection
             pass
 
+    def _close_strict(self):
+        """
+        Close the file, propagating any error the server returns for the
+        close request (unlike `close`, which deliberately ignores
+        them).
+        """
+        if self._closed:
+            return
+        self.sftp._log(DEBUG, "close({})".format(u(hexlify(self.handle))))
+        if self.pipelined:
+            self.sftp._finish_responses(self)
+        BufferedFile.close(self)
+        self.sftp._request(CMD_CLOSE, self.handle)
+
     def _data_in_prefetch_requests(self, offset, size):
         k = [
             x for x in list(self._prefetch_extents.values()) if x[0] <= offset

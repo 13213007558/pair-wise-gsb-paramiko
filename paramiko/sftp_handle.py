@@ -143,6 +143,22 @@ class SFTPHandle(ClosingContextManager):
             self.__tell += len(data)
         return SFTP_OK
 
+    def fsync(self):
+        """
+        Flush any buffered data for this open file to stable storage, as
+        requested through the ``fsync@openssh.com`` extension.
+
+        The default implementation returns ``SFTP_OP_UNSUPPORTED``;
+        override it (and make sure the extension is advertised to clients)
+        to support durable uploads.  Note that this only covers the file
+        contents, not the durability of any containing folder's entries.
+
+        :return: an SFTP error code like ``SFTP_OK``.
+
+        .. versionadded:: 5.0
+        """
+        return SFTP_OP_UNSUPPORTED
+
     def stat(self):
         """
         Return an `.SFTPAttributes` object referring to this open file, or an

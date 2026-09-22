@@ -67,6 +67,9 @@ class StubSFTPServer(SFTPServerInterface):
     # (the tests always create and eventually delete a subfolder, so there
     # shouldn't be any mess)
     ROOT = os.getcwd()
+    # handle class created by open(); subclasses may override to customize
+    # handle behavior (e.g. fsync support or fault injection)
+    handle_class = StubSFTPHandle
 
     def _realpath(self, path):
         return self.ROOT + self.canonicalize(path)
@@ -134,7 +137,7 @@ class StubSFTPServer(SFTPServerInterface):
             f = os.fdopen(fd, fstr)
         except OSError as e:
             return SFTPServer.convert_errno(e.errno)
-        fobj = StubSFTPHandle(flags)
+        fobj = self.handle_class(flags)
         fobj.filename = path
         fobj.readfile = f
         fobj.writefile = f

@@ -135,6 +135,8 @@ class BaseSFTP:
         self.logger = util.get_logger("paramiko.sftp")
         self.sock = None
         self.ultra_debug = False
+        # extensions advertised by the server, as a dict of name -> data
+        self.server_extensions = {}
 
     # ...internals...
 
@@ -145,10 +147,19 @@ class BaseSFTP:
         t, data = self._read_packet()
         if t != CMD_VERSION:
             raise SFTPError("Incompatible sftp protocol")
-        version = struct.unpack(">I", data[:4])[0]
-        #        if version != _VERSION:
-        #            raise SFTPError('Incompatible sftp protocol')
+        msg = Message(data)
+        version = msg.get_int()
+        # the rest of the packet is a list of extension name/data pairs
+        self.server_extensions = {}
+        while len(msg.get_remainder()) > 0:
+            name = msg.get_text()
+            self.server_extensions[name] = msg.get_text()
         return version
+
+    def _extension_pairs(self):
+        # extensions to advertise to the client, as a flat list of
+        # alternating extension names and data
+        return ["check-file", "md5,sha1"]
 
     def _send_server_version(self):
         # winscp will freak out if the server sends version info before the
@@ -157,11 +168,9 @@ class BaseSFTP:
         if t != CMD_INIT:
             raise SFTPError("Incompatible sftp protocol")
         version = struct.unpack(">I", data[:4])[0]
-        # advertise that we support "check-file"
-        extension_pairs = ["check-file", "md5,sha1"]
         msg = Message()
         msg.add_int(_VERSION)
-        msg.add(*extension_pairs)
+        msg.add(*self._extension_pairs())
         self._send_packet(CMD_VERSION, msg)
         return version
 

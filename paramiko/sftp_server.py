@@ -131,6 +131,17 @@ class SFTPServer(BaseSFTP, SubsystemHandler):
         else:
             super()._log(level, "[chan " + self.sock.get_name() + "] " + msg)
 
+    def _extension_pairs(self):
+        pairs = super()._extension_pairs()
+        # only advertise extensions the server interface actually
+        # implements (the base class just returns SFTP_OP_UNSUPPORTED)
+        if (
+            type(self.server).posix_rename
+            is not SFTPServerInterface.posix_rename
+        ):
+            pairs += ["posix-rename@openssh.com", "1"]
+        return pairs
+
     def start_subsystem(self, name, transport, channel):
         self.sock = channel
         self._log(DEBUG, "Started sftp server on channel {!r}".format(channel))
@@ -529,6 +540,16 @@ class SFTPServer(BaseSFTP, SubsystemHandler):
                 self._send_status(
                     request_number, self.server.posix_rename(oldpath, newpath)
                 )
+            elif tag == "fsync@openssh.com":
+                handle = msg.get_binary()
+                if handle not in self.file_table:
+                    self._send_status(
+                        request_number, SFTP_BAD_MESSAGE, "Invalid handle"
+                    )
+                else:
+                    self._send_status(
+                        request_number, self.file_table[handle].fsync()
+                    )
             else:
                 self._send_status(request_number, SFTP_OP_UNSUPPORTED)
         else:
