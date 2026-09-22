@@ -2,6 +2,14 @@
 Changelog
 =========
 
+- :feature:`-` `SSHConfig <paramiko.config.SSHConfig>` now supports the
+  ``Include`` directive: included files are parsed inline (preserving any
+  enclosing ``Host``/``Match`` context), globs expand in lexicographic
+  order, and relative paths resolve against the user or system SSH config
+  root (never the process working directory). Cycles, unreadable files and
+  syntax errors are reported with file, line number and include chain, and
+  nesting depth / total file count are limited via the new
+  ``max_include_depth`` and ``max_include_files`` options.
 - :feature:`-` Added support for the ``mlkem768x25519-sha256`` post-quantum
   hybrid key exchange method described in
   ``draft-ietf-sshm-mlkem-hybrid-kex``. It pairs ML-KEM-768 (FIPS 203) with
