@@ -23,6 +23,7 @@ Configuration file (aka ``ssh_config``) support.
 
 import fnmatch
 import getpass
+import glob
 import os
 import re
 import shlex
@@ -37,7 +38,11 @@ try:
 except ImportError as e:
     invoke_import_error = e
 
-from .ssh_exception import ConfigParseError, CouldNotCanonicalize
+from .ssh_exception import (
+    ConfigParseError,
+    CouldNotCanonicalize,
+    IncludeError,
+)
 
 SSH_PORT = 22
 
@@ -54,6 +59,17 @@ class SSHConfig:
     """
 
     SETTINGS_REGEX = re.compile(r"(\w+)(?:\s*=\s*|\s+)(.+)")
+
+    #: Default root directory for resolving relative ``Include`` paths
+    #: found in user-level configuration.
+    USER_CONFIG_DIR = "~/.ssh"
+    #: Default root directory for resolving relative ``Include`` paths
+    #: found in system-level configuration.
+    SYSTEM_CONFIG_DIR = "/etc/ssh"
+    #: Default maximum ``Include`` nesting depth.
+    DEFAULT_MAX_INCLUDE_DEPTH = 16
+    #: Default maximum number of files pullable in via ``Include``.
+    DEFAULT_MAX_INCLUDE_FILES = 256
 
     # TODO: do a full scan of ssh.c & friends to make sure we're fully
     # compatible across the board, e.g. OpenSSH 8.1 added %n to ProxyCommand.
@@ -90,94 +106,302 @@ class SSHConfig:
         self._config = []
 
     @classmethod
-    def from_text(cls, text):
+    def from_text(cls, text, **kwargs):
         """
         Create a new, parsed `SSHConfig` from ``text`` string.
 
+        :param str text: config text to parse
+        :param kwargs:
+            keyword arguments are passed on to `SSHConfig.parse`; see that
+            method for ``Include``-related options such as ``config_dir``
+            and ``config_type``.
+
         .. versionadded:: 2.7
+        .. versionchanged:: 5.1
+            Added ``**kwargs`` passthrough to `SSHConfig.parse`.
         """
-        return cls.from_file(StringIO(text))
+        return cls.from_file(StringIO(text), **kwargs)
 
     @classmethod
-    def from_path(cls, path):
+    def from_path(cls, path, **kwargs):
         """
         Create a new, parsed `SSHConfig` from the file found at ``path``.
 
+        :param str path: path of the config file to load
+        :param kwargs:
+            keyword arguments are passed on to `SSHConfig.parse`; see that
+            method for ``Include``-related options such as ``config_dir``
+            and ``config_type``.
+
         .. versionadded:: 2.7
+        .. versionchanged:: 5.1
+            Added ``**kwargs`` passthrough to `SSHConfig.parse`.
         """
         with open(path) as flo:
-            return cls.from_file(flo)
+            return cls.from_file(flo, **kwargs)
 
     @classmethod
-    def from_file(cls, flo):
+    def from_file(cls, flo, **kwargs):
         """
         Create a new, parsed `SSHConfig` from file-like object ``flo``.
 
+        :param flo: a file-like object to read the config file from
+        :param kwargs:
+            keyword arguments are passed on to `SSHConfig.parse`; see that
+            method for ``Include``-related options such as ``config_dir``
+            and ``config_type``.
+
         .. versionadded:: 2.7
+        .. versionchanged:: 5.1
+            Added ``**kwargs`` passthrough to `SSHConfig.parse`.
         """
         obj = cls()
-        obj.parse(flo)
+        obj.parse(flo, **kwargs)
         return obj
 
-    def parse(self, file_obj):
+    def parse(
+        self,
+        file_obj,
+        config_dir=None,
+        config_type="user",
+        max_include_depth=None,
+        max_include_files=None,
+    ):
         """
         Read an OpenSSH config from the given file object.
 
+        ``Include`` directives are followed and parsed inline, as if the
+        included files' contents had been inserted at the directive's
+        position. This preserves OpenSSH semantics such as
+        first-value-wins, and means an ``Include`` inside a ``Host`` or
+        ``Match`` block applies the included settings under that block's
+        conditional context. Included files may themselves contain
+        ``Include`` directives; when an included file has been fully
+        parsed, parsing of the parent file resumes where it left off.
+
         :param file_obj: a file-like object to read the config file from
+        :param str config_dir:
+            directory that relative ``Include`` paths are resolved
+            against. When not given, defaults to `USER_CONFIG_DIR` or
+            `SYSTEM_CONFIG_DIR` depending on ``config_type``. The current
+            working directory is never used.
+        :param str config_type:
+            ``"user"`` (the default) or ``"system"``; selects which
+            default root directory relative ``Include`` paths resolve
+            against when ``config_dir`` is not given.
+        :param int max_include_depth:
+            maximum ``Include`` nesting depth before `IncludeError` is
+            raised. Defaults to `DEFAULT_MAX_INCLUDE_DEPTH`.
+        :param int max_include_files:
+            maximum number of files that may be included before
+            `IncludeError` is raised. Defaults to
+            `DEFAULT_MAX_INCLUDE_FILES`.
+
+        :raises IncludeError:
+            when an ``Include`` directive cannot be followed (missing or
+            unreadable target, circular include, or exceeded limits).
+
+        .. versionchanged:: 5.1
+            Added ``Include`` support, along with the ``config_dir``,
+            ``config_type``, ``max_include_depth`` and
+            ``max_include_files`` keyword arguments.
         """
+        state = _IncludeState(
+            file_obj,
+            config_dir=config_dir,
+            config_type=config_type,
+            max_include_depth=max_include_depth,
+            max_include_files=max_include_files,
+        )
         # Start out w/ implicit/anonymous global host-like block to hold
         # anything not contained by an explicit one.
         context = {"host": ["*"], "config": {}}
-        for line in file_obj:
+        for line, source, lineno in self._iter_lines(
+            file_obj, state.root_source, state
+        ):
+            try:
+                context = self._parse_line(line, context)
+            except IncludeError:
+                raise
+            except ConfigParseError as e:
+                raise ConfigParseError(
+                    self._annotate(str(e), source, lineno, state)
+                )
+        # Store last 'open' block and we're done
+        self._config.append(context)
+
+    def _parse_line(self, line, context):
+        """
+        Parse a single, non-``Include`` config line into ``context``.
+
+        Returns the context subsequent lines should be parsed into (a new
+        one is created when ``Host`` or ``Match`` opens a new block).
+        """
+        # Parse line into key, value
+        match = re.match(self.SETTINGS_REGEX, line)
+        if not match:
+            raise ConfigParseError("Unparsable line {}".format(line))
+        key = match.group(1).lower()
+        value = match.group(2)
+
+        # Host keyword triggers switch to new block/context
+        if key in ("host", "match"):
+            self._config.append(context)
+            context = {"config": {}}
+            if key == "host":
+                # TODO (backwards incompat): make these real objects or at
+                # least name this "hosts" to acknowledge it's an iterable.
+                # (Doing so prior to 3.0, despite it being a private API,
+                # feels bad - surely such an old codebase has folks
+                # actually relying on these keys.)
+                context["host"] = self._get_hosts(value)
+            else:
+                context["matches"] = self._get_matches(value)
+        # Special-case for noop ProxyCommands
+        elif key == "proxycommand" and value.lower() == "none":
+            # Store 'none' as None - not as a string implying that the
+            # proxycommand is the literal shell command "none"!
+            context["config"][key] = None
+        # All other keywords get stored, directly or via append
+        else:
+            if value.startswith('"') and value.endswith('"'):
+                value = value[1:-1]
+
+            # identityfile, localforward, remoteforward keys are special
+            # cases, since they are allowed to be specified multiple times
+            # and they should be tried in order of specification.
+            if key in ["identityfile", "localforward", "remoteforward"]:
+                if key in context["config"]:
+                    context["config"][key].append(value)
+                else:
+                    context["config"][key] = [value]
+            elif key not in context["config"]:
+                context["config"][key] = value
+        return context
+
+    def _iter_lines(self, file_obj, source, state):
+        """
+        Yield ``(line, source, lineno)`` tuples, expanding ``Include``s.
+
+        Included files are recursed into depth-first, so their lines
+        appear exactly where the ``Include`` directive sat; parsing of the
+        parent file then resumes in its original order.
+        """
+        for lineno, raw_line in enumerate(file_obj, 1):
             # Strip any leading or trailing whitespace from the line.
             # Refer to https://github.com/paramiko/paramiko/issues/499
-            line = line.strip()
+            line = raw_line.strip()
             # Skip blanks, comments
             if not line or line.startswith("#"):
                 continue
-
-            # Parse line into key, value
             match = re.match(self.SETTINGS_REGEX, line)
-            if not match:
-                raise ConfigParseError("Unparsable line {}".format(line))
-            key = match.group(1).lower()
-            value = match.group(2)
-
-            # Host keyword triggers switch to new block/context
-            if key in ("host", "match"):
-                self._config.append(context)
-                context = {"config": {}}
-                if key == "host":
-                    # TODO (backwards incompat): make these real objects or at
-                    # least name this "hosts" to acknowledge it's an iterable.
-                    # (Doing so prior to 3.0, despite it being a private API,
-                    # feels bad - surely such an old codebase has folks
-                    # actually relying on these keys.)
-                    context["host"] = self._get_hosts(value)
-                else:
-                    context["matches"] = self._get_matches(value)
-            # Special-case for noop ProxyCommands
-            elif key == "proxycommand" and value.lower() == "none":
-                # Store 'none' as None - not as a string implying that the
-                # proxycommand is the literal shell command "none"!
-                context["config"][key] = None
-            # All other keywords get stored, directly or via append
+            if match and match.group(1).lower() == "include":
+                yield from self._expand_include(
+                    match.group(2), source, lineno, state
+                )
             else:
-                if value.startswith('"') and value.endswith('"'):
-                    value = value[1:-1]
+                yield line, source, lineno
 
-                # identityfile, localforward, remoteforward keys are special
-                # cases, since they are allowed to be specified multiple times
-                # and they should be tried in order of specification.
-                if key in ["identityfile", "localforward", "remoteforward"]:
-                    if key in context["config"]:
-                        context["config"][key].append(value)
-                    else:
-                        context["config"][key] = [value]
-                elif key not in context["config"]:
-                    context["config"][key] = value
-        # Store last 'open' block and we're done
-        self._config.append(context)
+    def _expand_include(self, value, source, lineno, state):
+        try:
+            patterns = shlex.split(value)
+        except ValueError:
+            raise self._include_error(
+                "Unparsable Include value {!r}".format(value),
+                source,
+                lineno,
+                state,
+            )
+        if not patterns:
+            raise self._include_error(
+                "Include requires at least one path", source, lineno, state
+            )
+        for pattern in patterns:
+            resolved = self._resolve_include_path(pattern, state)
+            matches = sorted(glob.glob(resolved))
+            if not matches:
+                # Unmatched glob patterns are silently ignored, but a
+                # literally-named file which does not exist is an error.
+                if glob.has_magic(resolved):
+                    continue
+                raise self._include_error(
+                    "Included file not found: {}".format(pattern),
+                    source,
+                    lineno,
+                    state,
+                )
+            for path in matches:
+                yield from self._include_file(path, source, lineno, state)
+
+    def _resolve_include_path(self, pattern, state):
+        pattern = os.path.expanduser(pattern)
+        if os.path.isabs(pattern):
+            return pattern
+        # Relative paths resolve against the configuration root directory
+        # for this config type -- never the current working directory.
+        return os.path.join(state.config_dir, pattern)
+
+    def _include_file(self, path, source, lineno, state):
+        real = os.path.realpath(path)
+        # Circular includes -- including symlink loops resolving back to
+        # an already-open file -- are rejected. Including the same file
+        # again at a later, non-nested position is legal.
+        if real in [realpath for realpath, _ in state.chain]:
+            raise self._include_error(
+                "Circular include of {!r}".format(path),
+                source,
+                lineno,
+                state,
+            )
+        if len(state.chain) >= state.max_depth:
+            raise self._include_error(
+                "Maximum include depth ({}) exceeded".format(
+                    state.max_depth
+                ),
+                source,
+                lineno,
+                state,
+            )
+        if state.count >= state.max_files:
+            raise self._include_error(
+                "Maximum included file count ({}) exceeded".format(
+                    state.max_files
+                ),
+                source,
+                lineno,
+                state,
+            )
+        state.count += 1
+        try:
+            included = open(path)
+        except OSError as e:
+            raise self._include_error(
+                "Unable to open included file {!r}: {}".format(path, e),
+                source,
+                lineno,
+                state,
+            )
+        state.chain.append((real, path))
+        try:
+            with included:
+                yield from self._iter_lines(included, path, state)
+        finally:
+            state.chain.pop()
+
+    def _include_error(self, message, source, lineno, state):
+        return IncludeError(self._annotate(message, source, lineno, state))
+
+    def _annotate(self, message, source, lineno, state):
+        """
+        Attach file, line number and include chain info to ``message``.
+        """
+        message = "{} ({}, line {})".format(message, source, lineno)
+        chain = [display for _, display in state.chain]
+        if chain:
+            message = "{}; include chain: {}".format(
+                message, " -> ".join(chain)
+            )
+        return message
 
     def lookup(self, hostname):
         """
@@ -554,6 +778,55 @@ class SSHConfig:
             if err is not None:
                 raise ConfigParseError(err)
         return matches
+
+
+class _IncludeState:
+    """
+    Bookkeeping for ``Include`` processing during a single parse.
+    """
+
+    def __init__(
+        self,
+        file_obj,
+        config_dir=None,
+        config_type="user",
+        max_include_depth=None,
+        max_include_files=None,
+    ):
+        if config_type not in ("user", "system"):
+            raise ValueError(
+                "config_type must be 'user' or 'system', not {!r}".format(
+                    config_type
+                )
+            )
+        if config_dir is None:
+            config_dir = (
+                SSHConfig.USER_CONFIG_DIR
+                if config_type == "user"
+                else SSHConfig.SYSTEM_CONFIG_DIR
+            )
+        self.config_dir = os.path.abspath(os.path.expanduser(config_dir))
+        self.max_depth = (
+            SSHConfig.DEFAULT_MAX_INCLUDE_DEPTH
+            if max_include_depth is None
+            else max_include_depth
+        )
+        self.max_files = (
+            SSHConfig.DEFAULT_MAX_INCLUDE_FILES
+            if max_include_files is None
+            else max_include_files
+        )
+        # Number of files included so far.
+        self.count = 0
+        # Chain of (realpath, display name) for files currently being
+        # parsed, starting with the root file when its path is known.
+        self.chain = []
+        name = getattr(file_obj, "name", None)
+        if isinstance(name, str):
+            self.chain.append((os.path.realpath(name), name))
+            self.root_source = name
+        else:
+            self.root_source = "<stream>"
 
 
 def _addressfamily_host_lookup(hostname, options):

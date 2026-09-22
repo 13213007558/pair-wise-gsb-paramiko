@@ -1,6 +1,8 @@
 # This file is part of Paramiko and subject to the license in /LICENSE in this
 # repository
 
+import os
+from io import StringIO
 from os.path import expanduser
 from socket import gaierror
 
@@ -17,6 +19,7 @@ from paramiko import (
     SSHConfigDict,
     CouldNotCanonicalize,
     ConfigParseError,
+    IncludeError,
 )
 
 from ._util import _config
@@ -1046,3 +1049,318 @@ class TestFinalMatching(object):
     def test_negated(self):
         result = load_config("match-final").lookup("jump")
         assert result["port"] == "1003"
+
+
+def _write_config(root, name, text):
+    path = root / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
+
+
+def _freeze(root):
+    # Render a config tree read-only, proving parsing never writes to it.
+    for dirpath, dirnames, filenames in os.walk(root):
+        os.chmod(dirpath, 0o555)
+        for filename in filenames:
+            os.chmod(os.path.join(dirpath, filename), 0o444)
+
+
+def _thaw(root):
+    for dirpath, dirnames, filenames in os.walk(root, topdown=False):
+        for filename in filenames:
+            os.chmod(os.path.join(dirpath, filename), 0o644)
+        os.chmod(dirpath, 0o755)
+
+
+@fixture
+def ssh_root(tmp_path):
+    root = tmp_path / "ssh"
+    root.mkdir()
+    yield root
+    # Restore writability so pytest can clean the temp dir up again.
+    if root.exists():
+        _thaw(root)
+
+
+class TestSSHConfigInclude:
+    def from_path(self, root, name="config", **kwargs):
+        kwargs.setdefault("config_dir", str(root))
+        return SSHConfig.from_path(str(root / name), **kwargs)
+
+    def test_glob_include_expands_in_lexicographic_order(
+        self, ssh_root, monkeypatch
+    ):
+        _write_config(ssh_root, "config", "Include conf.d/*.conf\n")
+        # Created out of order on purpose: only the lexicographic filename
+        # ordering may decide which value wins.
+        _write_config(
+            ssh_root, "conf.d/20-second.conf", "User second\nPort 2222\n"
+        )
+        _write_config(ssh_root, "conf.d/10-first.conf", "User first\n")
+        _freeze(ssh_root)
+        # cwd must not factor into resolution, either.
+        monkeypatch.chdir(ssh_root.parent)
+        result = self.from_path(ssh_root).lookup("whatever")
+        assert result["user"] == "first"
+        assert result["port"] == "2222"
+
+    def test_relative_include_uses_config_dir_not_cwd(
+        self, ssh_root, tmp_path, monkeypatch
+    ):
+        _write_config(ssh_root, "config", "Include conf.d/real.conf\n")
+        _write_config(ssh_root, "conf.d/real.conf", "User real\n")
+        # Decoy only found if the cwd were (incorrectly) consulted.
+        decoy = tmp_path / "decoy"
+        _write_config(decoy, "conf.d/real.conf", "User decoy\n")
+        _freeze(ssh_root)
+        monkeypatch.chdir(decoy)
+        result = self.from_path(ssh_root).lookup("x")
+        assert result["user"] == "real"
+
+    def test_include_inside_host_block_keeps_conditional_context(
+        self, ssh_root
+    ):
+        _write_config(
+            ssh_root,
+            "config",
+            "Host gated\n    Include extra.conf\n\nHost *\n    User default\n",
+        )
+        _write_config(ssh_root, "extra.conf", "User gateduser\nPort 2200\n")
+        _freeze(ssh_root)
+        config = self.from_path(ssh_root)
+        hit = config.lookup("gated")
+        assert hit["user"] == "gateduser"
+        assert hit["port"] == "2200"
+        miss = config.lookup("other")
+        assert miss["user"] == "default"
+        assert "port" not in miss
+
+    def test_include_inside_match_block_keeps_conditional_context(
+        self, ssh_root
+    ):
+        _write_config(
+            ssh_root,
+            "config",
+            "Match host web*\n"
+            "    Include web.conf\n\n"
+            "Host *\n    User default\n",
+        )
+        _write_config(ssh_root, "web.conf", "User webuser\n")
+        _freeze(ssh_root)
+        config = self.from_path(ssh_root)
+        assert config.lookup("web-1")["user"] == "webuser"
+        assert config.lookup("db-1")["user"] == "default"
+
+    def test_nested_includes_resume_parent_in_order(self, ssh_root):
+        _write_config(ssh_root, "config", "Include a.conf\nCompression yes\n")
+        _write_config(ssh_root, "a.conf", "Include b.conf\nUser from-a\n")
+        _write_config(ssh_root, "b.conf", "Port 2022\nUser from-b\n")
+        _freeze(ssh_root)
+        result = self.from_path(ssh_root).lookup("x")
+        # Depth-first inline expansion: b.conf's lines land before the
+        # remainder of a.conf, and the root file finishes last.
+        assert result["user"] == "from-b"
+        assert result["port"] == "2022"
+        assert result["compression"] == "yes"
+
+    def test_same_file_may_be_included_twice_in_different_positions(
+        self, ssh_root
+    ):
+        _write_config(
+            ssh_root,
+            "config",
+            "Include common.conf\n"
+            "Host one\n    User one\n    Include common.conf\n",
+        )
+        _write_config(
+            ssh_root,
+            "common.conf",
+            "IdentityFile ~/.ssh/id_common\nServerAliveInterval 30\n",
+        )
+        _freeze(ssh_root)
+        config = self.from_path(ssh_root)
+        one = config.lookup("one")
+        assert one["user"] == "one"
+        # Included twice, but repeat directives dedupe rather than error.
+        assert one["identityfile"] == [expanduser("~/.ssh/id_common")]
+        assert one["serveraliveinterval"] == "30"
+        two = config.lookup("two")
+        assert two["identityfile"] == [expanduser("~/.ssh/id_common")]
+        assert "user" not in two
+
+    def test_repeated_lookups_do_not_pollute_each_other(self, ssh_root):
+        _write_config(
+            ssh_root,
+            "config",
+            "Include common.conf\nHost one\n    User one\n",
+        )
+        _write_config(
+            ssh_root, "common.conf", "IdentityFile ~/.ssh/id_common\n"
+        )
+        _freeze(ssh_root)
+        config = self.from_path(ssh_root)
+        expected = [expanduser("~/.ssh/id_common")]
+        first = config.lookup("one")
+        second = config.lookup("two")
+        assert first["identityfile"] == expected
+        assert second["identityfile"] == expected
+        # Mutating one lookup's result must not leak into the parsed
+        # config or into subsequent lookups.
+        first["identityfile"].append("/bogus")
+        assert config.lookup("one")["identityfile"] == expected
+        assert config.lookup("two")["identityfile"] == expected
+
+    def test_circular_include_reports_chain(self, ssh_root):
+        _write_config(ssh_root, "a.conf", "Include b.conf\n")
+        _write_config(ssh_root, "b.conf", "Include a.conf\n")
+        _freeze(ssh_root)
+        with raises(IncludeError) as info:
+            self.from_path(ssh_root, "a.conf")
+        message = str(info.value)
+        assert "Circular" in message
+        assert "a.conf" in message
+        assert "b.conf" in message
+        assert "line 1" in message
+        # The include chain is rendered as an arrow-separated path.
+        assert "->" in message
+
+    def test_self_include_is_circular(self, ssh_root):
+        _write_config(ssh_root, "self.conf", "Include self.conf\n")
+        _freeze(ssh_root)
+        with raises(IncludeError, match="Circular"):
+            self.from_path(ssh_root, "self.conf")
+
+    def test_symlink_loop_is_detected(self, ssh_root):
+        real = _write_config(ssh_root, "real.conf", "Include link.conf\n")
+        os.symlink(str(real), str(ssh_root / "link.conf"))
+        _freeze(ssh_root)
+        with raises(IncludeError, match="Circular"):
+            self.from_path(ssh_root, "real.conf")
+
+    @mark.skipif(
+        hasattr(os, "geteuid") and os.geteuid() == 0,
+        reason="root can read files regardless of permission bits",
+    )
+    def test_unreadable_include_target_errors(self, ssh_root):
+        _write_config(ssh_root, "config", "Include secret.conf\n")
+        secret = _write_config(ssh_root, "secret.conf", "User nope\n")
+        _freeze(ssh_root)
+        os.chmod(str(secret), 0)
+        with raises(IncludeError) as info:
+            self.from_path(ssh_root)
+        message = str(info.value)
+        assert "Unable to open" in message
+        assert "secret.conf" in message
+
+    def test_syntax_error_in_included_file_has_location_and_chain(
+        self, ssh_root
+    ):
+        _write_config(ssh_root, "config", "User ok\nInclude bad.conf\n")
+        _write_config(ssh_root, "bad.conf", "User fine\n!!!nonsense\n")
+        _freeze(ssh_root)
+        with raises(ConfigParseError) as info:
+            self.from_path(ssh_root)
+        message = str(info.value)
+        assert "bad.conf" in message
+        assert "line 2" in message
+        # Chain mentions the including parent file as well.
+        assert "config" in message
+
+    def test_unmatched_glob_is_ignored(self, ssh_root):
+        _write_config(ssh_root, "config", "Include conf.d/*.conf\nUser ok\n")
+        _freeze(ssh_root)
+        result = self.from_path(ssh_root).lookup("x")
+        assert result["user"] == "ok"
+
+    def test_missing_literal_include_target_errors(self, ssh_root):
+        _write_config(ssh_root, "config", "Include not-there.conf\n")
+        _freeze(ssh_root)
+        with raises(IncludeError) as info:
+            self.from_path(ssh_root)
+        message = str(info.value)
+        assert "not found" in message
+        assert "line 1" in message
+
+    def test_include_depth_limit_is_configurable(self, ssh_root):
+        _write_config(ssh_root, "a.conf", "Include b.conf\n")
+        _write_config(ssh_root, "b.conf", "Include c.conf\n")
+        _write_config(ssh_root, "c.conf", "User deep\n")
+        _freeze(ssh_root)
+        with raises(IncludeError, match="depth"):
+            self.from_path(ssh_root, "a.conf", max_include_depth=2)
+        config = self.from_path(ssh_root, "a.conf", max_include_depth=3)
+        assert config.lookup("x")["user"] == "deep"
+
+    def test_include_file_count_limit_is_configurable(self, ssh_root):
+        _write_config(
+            ssh_root,
+            "config",
+            "Include one.conf\nInclude two.conf\nInclude three.conf\n",
+        )
+        for name in ("one", "two", "three"):
+            _write_config(ssh_root, name + ".conf", "User {}\n".format(name))
+        _freeze(ssh_root)
+        with raises(IncludeError, match="count"):
+            self.from_path(ssh_root, max_include_files=2)
+        config = self.from_path(ssh_root, max_include_files=3)
+        assert config.lookup("x")["user"] == "one"
+
+    def test_parse_does_not_execute_match_exec(self, ssh_root, tmp_path):
+        sentinel = tmp_path / "exec-ran"
+        _write_config(ssh_root, "config", "Include matched.conf\n")
+        _write_config(
+            ssh_root,
+            "matched.conf",
+            'Match exec "touch {}"\n    User nope\n'.format(sentinel),
+        )
+        _freeze(ssh_root)
+        self.from_path(ssh_root)
+        assert not sentinel.exists()
+
+    def test_from_file_with_explicit_config_dir_and_type(self, ssh_root):
+        _write_config(ssh_root, "conf.d/x.conf", "User fromfile\n")
+        _freeze(ssh_root)
+        config = SSHConfig.from_file(
+            StringIO("Include conf.d/x.conf\n"),
+            config_dir=str(ssh_root),
+            config_type="user",
+        )
+        assert config.lookup("x")["user"] == "fromfile"
+
+    def test_system_config_type_uses_system_root(self, ssh_root, monkeypatch):
+        _write_config(ssh_root, "ssh_config.d/sys.conf", "User sysuser\n")
+        _freeze(ssh_root)
+        monkeypatch.setattr(SSHConfig, "SYSTEM_CONFIG_DIR", str(ssh_root))
+        config = SSHConfig.from_text(
+            "Include ssh_config.d/sys.conf\n", config_type="system"
+        )
+        assert config.lookup("x")["user"] == "sysuser"
+
+    def test_user_config_type_defaults_to_home_ssh_dir(
+        self, tmp_path, monkeypatch
+    ):
+        home = tmp_path / "home"
+        _write_config(home, ".ssh/conf.d/y.conf", "User homeuser\n")
+        monkeypatch.setenv("HOME", str(home))
+        config = SSHConfig.from_text("Include conf.d/y.conf\n")
+        assert config.lookup("x")["user"] == "homeuser"
+
+    def test_multiple_patterns_on_one_include_line(self, ssh_root):
+        _write_config(ssh_root, "config", "Include a.conf b.conf\n")
+        _write_config(ssh_root, "a.conf", "User a\n")
+        _write_config(ssh_root, "b.conf", "Port 2200\nUser b\n")
+        _freeze(ssh_root)
+        result = self.from_path(ssh_root).lookup("x")
+        assert result["user"] == "a"
+        assert result["port"] == "2200"
+
+    def test_invalid_config_type_rejected(self):
+        with raises(ValueError):
+            SSHConfig.from_text("User x\n", config_type="bogus")
+
+    def test_bare_include_is_a_parse_error(self, ssh_root):
+        _write_config(ssh_root, "config", "Include\n")
+        _freeze(ssh_root)
+        with raises(ConfigParseError):
+            self.from_path(ssh_root)

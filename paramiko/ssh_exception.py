@@ -244,6 +244,21 @@ class ConfigParseError(SSHException):
     pass
 
 
+class IncludeError(ConfigParseError):
+    """
+    A fatal error was encountered trying to process an ``Include`` directive.
+
+    This covers problems such as circular or overly deep include chains,
+    unreadable or missing explicitly-named include targets, and exceeding
+    configured include limits. The error message includes the file, line
+    number and include chain describing where the problem occurred.
+
+    .. versionadded:: 5.1
+    """
+
+    pass
+
+
 class MessageOrderError(SSHException):
     """
     Out-of-order protocol messages were received, violating "strict kex" mode.

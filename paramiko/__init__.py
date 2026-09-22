@@ -60,6 +60,7 @@ from paramiko.ssh_exception import (
     ConfigParseError,
     CouldNotCanonicalize,
     IncompatiblePeer,
+    IncludeError,
     MessageOrderError,
     PasswordRequiredException,
     ProxyCommandFailure,
