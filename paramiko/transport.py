@@ -357,6 +357,7 @@ class Transport(threading.Thread, ClosingContextManager):
         server_sig_algs=True,
         strict_kex=True,
         packetizer_class=None,
+        update_host_keys=False,
     ):
         """
         Create a new SSH session over an existing socket, or socket-like
@@ -424,6 +425,19 @@ class Transport(threading.Thread, ClosingContextManager):
         :param packetizer_class:
             Which class to use for instantiating the internal packet handler.
             Default: ``None`` (i.e.: use `Packetizer` as normal).
+        :param bool update_host_keys:
+            Whether to advertise support for, and process, OpenSSH's host key
+            rotation protocol (the ``hostkeys-00@openssh.com`` and
+            ``hostkeys-prove-00@openssh.com`` extensions) when in client
+            mode. Default: ``False``.
+
+            When enabled, the server may offer its full set of host keys
+            after authentication; any keys it can prove ownership of (via a
+            signature bound to this connection's session identifier) are
+            handed to the callback registered with
+            `set_host_key_update_handler`. Processing only occurs once
+            `mark_host_key_trusted` has been called, i.e. after this
+            connection's original host key has been verified by the caller.
 
         .. versionchanged:: 1.15
             Added the ``default_window_size`` and ``default_max_packet_size``
@@ -436,12 +450,22 @@ class Transport(threading.Thread, ClosingContextManager):
             Added the ``strict_kex`` kwarg.
         .. versionchanged:: 3.4
             Added the ``packetizer_class`` kwarg.
+        .. versionchanged:: 5.1
+            Added the `update_host_keys` kwarg.
         """
         self.active = False
         self.hostname = None
         self.server_extensions = {}
         self.advertise_strict_kex = strict_kex
         self.agreed_on_strict_kex = False
+        # OpenSSH host key rotation (client mode) state. Opt-in via the
+        # update_host_keys kwarg; additionally gated on the caller verifying
+        # this connection's host key (see mark_host_key_trusted).
+        self.update_host_keys = update_host_keys
+        self._host_key_trusted = False
+        self._host_key_update_handler = None
+        self._host_keys_update = None
+        self._pending_host_key_proofs = None
 
         # TODO: these two overrides on sock's type should go away sometime, too
         # many ways to do it!
@@ -1244,6 +1268,61 @@ class Transport(threading.Thread, ClosingContextManager):
             if self.completion_event.is_set():
                 break
         return self.global_response
+
+    def mark_host_key_trusted(self):
+        """
+        Declare this connection's host key to be trusted.
+
+        Call this (in client mode) once the server's host key has been
+        verified against whatever local trust store or policy is in effect,
+        e.g. right after `start_client` returns and
+        `get_remote_server_key` has been checked.
+
+        This is a prerequisite for processing OpenSSH host key rotation
+        offers (see the ``update_host_keys`` constructor kwarg): candidate
+        keys received before the current connection was authenticated via
+        its original, trusted host key are ignored.
+
+        .. versionadded:: 5.1
+        """
+        self._host_key_trusted = True
+
+    def set_host_key_update_handler(self, handler):
+        """
+        Register a callback receiving verified host key updates.
+
+        Only meaningful in client mode when the ``update_host_keys``
+        constructor kwarg is enabled. When the server offers additional host
+        keys (OpenSSH's ``hostkeys-00@openssh.com`` extension), each
+        candidate is required to prove ownership via a signature bound to
+        this connection's session identifier; the full set of candidates
+        whose proofs verify is then passed, as a list of `.PKey` objects,
+        to ``handler`` so the caller can decide how to persist them.
+
+        The handler is called at most once per connection (reconnecting
+        requires the server to prove its keys again), and only if at least
+        one candidate verifies. It is invoked from this transport's packet
+        handling thread.
+
+        :param handler:
+            a callable taking a single argument: a list of `.PKey` objects
+            representing newly verified server host keys.
+
+        .. versionadded:: 5.1
+        """
+        self._host_key_update_handler = handler
+
+    def get_host_keys_update(self):
+        """
+        Return any host keys verified via OpenSSH host key rotation.
+
+        :return:
+            a list of `.PKey` objects, or ``None`` if no verified update
+            has been received on this connection.
+
+        .. versionadded:: 5.1
+        """
+        return self._host_keys_update
 
     def accept(self, timeout=None):
         """
@@ -2295,6 +2374,8 @@ class Transport(threading.Thread, ClosingContextManager):
                     self.preferred_keys,
                 )
             )
+            # Signal that clients may send us MSG_EXT_INFO after NEWKEYS.
+            kex_algos.append("ext-info-s")
         else:
             available_server_keys = self.preferred_keys
             # Signal support for MSG_EXT_INFO so server will send it to us.
@@ -2716,15 +2797,18 @@ class Transport(threading.Thread, ClosingContextManager):
             and self._remote_ext_info == "ext-info-c"
         ):
             extensions = {"server-sig-algs": ",".join(self.preferred_pubkeys)}
-            m = Message()
-            m.add_byte(cMSG_EXT_INFO)
-            m.add_int(len(extensions))
-            for name, value in sorted(extensions.items()):
-                m.add_string(name)
-                m.add_string(value)
-            self._send_message(m)
+            self._send_ext_info(extensions)
         # we always expect to receive NEWKEYS now
         self._expect_packet(MSG_NEWKEYS)
+
+    def _send_ext_info(self, extensions):
+        m = Message()
+        m.add_byte(cMSG_EXT_INFO)
+        m.add_int(len(extensions))
+        for name, value in sorted(extensions.items()):
+            m.add_string(name)
+            m.add_string(value)
+        self._send_message(m)
 
     def _auth_trigger(self):
         self.authenticated = True
@@ -2767,6 +2851,21 @@ class Transport(threading.Thread, ClosingContextManager):
             # (also signal to packetizer as it sometimes wants to know this
             # status as well, eg when seqnos rollover)
             self.initial_kex_done = self.packetizer._initial_kex_done = True
+            # If the server signaled EXT_INFO support, and we have client
+            # extensions to advertise, do so now (only valid after the
+            # initial key exchange).
+            if not self.server_mode and self._remote_ext_info == "ext-info-s":
+                extensions = {}
+                if self.update_host_keys:
+                    # Signal support for OpenSSH host key rotation; the
+                    # server may then offer its other host keys post-auth.
+                    extensions["hostkeys-00@openssh.com"] = ""
+                if extensions:
+                    self._log(
+                        DEBUG,
+                        "Sending EXT_INFO: {}".format(extensions),
+                    )
+                    self._send_ext_info(extensions)
         # send an event?
         if self.completion_event is not None:
             self.completion_event.set()
@@ -2790,6 +2889,14 @@ class Transport(threading.Thread, ClosingContextManager):
         self._log(DEBUG, 'Received global request "{}"'.format(kind))
         want_reply = m.get_boolean()
         if not self.server_mode:
+            if (
+                kind == "hostkeys-00@openssh.com"
+                and self._accepting_host_key_update()
+            ):
+                # OpenSSH host key rotation offer; handled internally, and
+                # never wants a reply per the protocol spec.
+                self._process_host_keys_offer(m)
+                return
             self._log(
                 DEBUG,
                 'Rejecting "{}" global request from server.'.format(kind),
@@ -2822,16 +2929,118 @@ class Transport(threading.Thread, ClosingContextManager):
             self._send_message(msg)
 
     def _parse_request_success(self, m):
+        if self._pending_host_key_proofs is not None:
+            # Response to our hostkeys-prove-00@openssh.com request.
+            self._process_host_key_proofs(m)
+            return
         self._log(DEBUG, "Global request successful.")
         self.global_response = m
         if self.completion_event is not None:
             self.completion_event.set()
 
     def _parse_request_failure(self, m):
+        if self._pending_host_key_proofs is not None:
+            self._log(DEBUG, "Server refused to prove its host keys.")
+            self._pending_host_key_proofs = None
+            return
         self._log(DEBUG, "Global request denied.")
         self.global_response = None
         if self.completion_event is not None:
             self.completion_event.set()
+
+    def _accepting_host_key_update(self):
+        # Only process host key rotation offers when explicitly enabled,
+        # when the caller has verified this connection's original host key,
+        # once user auth has completed (offers are only meaningful on an
+        # authenticated connection), and at most once per connection.
+        return (
+            self.update_host_keys
+            and self._host_key_trusted
+            and self.authenticated
+            and self._host_keys_update is None
+            and self._pending_host_key_proofs is None
+        )
+
+    @staticmethod
+    def _key_from_blob(blob):
+        key_type = Message(blob).get_text()
+        return PKey.from_type_string(key_type, blob)
+
+    def _process_host_keys_offer(self, m):
+        # Read all candidate key blobs, dropping duplicates (preserving
+        # order) and the key already in use for this session; anything we
+        # cannot parse is ignored as well.
+        blobs = []
+        seen = set()
+        current = self.host_key.asbytes() if self.host_key is not None else b""
+        while m.get_remainder():
+            blob = m.get_string()
+            if blob in seen or blob == current:
+                continue
+            seen.add(blob)
+            try:
+                self._key_from_blob(blob)
+            except Exception:
+                self._log(
+                    DEBUG, "Ignoring unparsable host key candidate blob"
+                )
+                continue
+            blobs.append(blob)
+        if not blobs:
+            return
+        # Ask the server to prove ownership of the entire candidate set
+        # before any of it is handed off; only one offer is processed per
+        # connection.
+        self._pending_host_key_proofs = blobs
+        request = Message()
+        request.add_byte(cMSG_GLOBAL_REQUEST)
+        request.add_string("hostkeys-prove-00@openssh.com")
+        request.add_boolean(True)
+        for blob in blobs:
+            request.add_string(blob)
+        self._log(
+            DEBUG,
+            "Requesting proof of ownership for {} host key(s)".format(
+                len(blobs)
+            ),
+        )
+        self._send_message(request)
+
+    def _process_host_key_proofs(self, m):
+        blobs = self._pending_host_key_proofs
+        self._pending_host_key_proofs = None
+        sigs = []
+        while m.get_remainder():
+            sigs.append(m.get_string())
+        # Verify the entire candidate set before handing any of it off.
+        # Candidates with missing, mismatched, or invalid proofs (each proof
+        # must be a signature, by the candidate key, over the extension name,
+        # this connection's session identifier, and the key blob) are
+        # silently dropped.
+        verified = []
+        for blob, sig in zip(blobs, sigs):
+            try:
+                key = self._key_from_blob(blob)
+                signed = Message()
+                signed.add_string("hostkeys-prove-00@openssh.com")
+                signed.add_string(self.session_id)
+                signed.add_string(blob)
+                if key.verify_ssh_sig(signed.asbytes(), Message(sig)):
+                    verified.append(key)
+                else:
+                    self._log(DEBUG, "Host key proof failed to verify")
+            except Exception:
+                self._log(DEBUG, "Unable to verify host key proof")
+        self._host_keys_update = verified
+        if verified:
+            self._log(
+                DEBUG,
+                "Verified {} new host key(s) from server".format(
+                    len(verified)
+                ),
+            )
+            if self._host_key_update_handler is not None:
+                self._host_key_update_handler(verified)
 
     def _parse_channel_open_success(self, m):
         chanid = m.get_int()

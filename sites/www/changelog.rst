@@ -2,6 +2,15 @@
 Changelog
 =========
 
+- :feature:`-` Added client-side support for OpenSSH's host key rotation
+  protocol extensions (``hostkeys-00@openssh.com`` and
+  ``hostkeys-prove-00@openssh.com``). When explicitly enabled (via the new
+  ``update_host_keys`` keyword argument to `.SSHClient.connect` or
+  `.Transport`), the client advertises support to compatible servers,
+  verifies proof-of-ownership signatures (bound to the connection's session
+  identifier) for any host keys the server offers after authentication, and
+  adds the verified keys to its local host key store. Keys the server stops
+  offering are never removed.
 - :feature:`-` Added support for the ``mlkem768x25519-sha256`` post-quantum
   hybrid key exchange method described in
   ``draft-ietf-sshm-mlkem-hybrid-kex``. It pairs ML-KEM-768 (FIPS 203) with

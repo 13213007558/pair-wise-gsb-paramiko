@@ -158,6 +158,19 @@ class SSHClient(ClosingContextManager):
         """
         return self._host_keys
 
+    def _update_host_keys(self, hostname, keys):
+        """
+        Store new host keys learned via OpenSSH host key rotation.
+
+        Called (from the transport's packet thread) with the set of keys the
+        server proved ownership of on the current connection. Only ever adds
+        to the local store; keys the server no longer offers are left alone.
+        """
+        for key in keys:
+            self._host_keys.add(hostname, key.get_name(), key)
+        if self._host_keys_filename is not None:
+            self.save_host_keys(self._host_keys_filename)
+
     def set_log_channel(self, name):
         """
         Set the channel for logging.  The default is ``"paramiko.transport"``
@@ -233,6 +246,7 @@ class SSHClient(ClosingContextManager):
         disabled_algorithms=None,
         transport_factory=None,
         auth_strategy=None,
+        update_host_keys=False,
     ):
         """
         Connect to an SSH server and authenticate to it.  The server's host key
@@ -309,6 +323,13 @@ class SSHClient(ClosingContextManager):
             an optional instance of `.AuthStrategy`, triggering use of this
             newer authentication mechanism instead of SSHClient's legacy auth
             method.
+        :param bool update_host_keys:
+            set to True to enable OpenSSH host key rotation: once the
+            server's host key has been verified, the server may offer its
+            other host keys, and any it proves ownership of (via signatures
+            bound to this connection) are added to the local host keys, and
+            saved if `load_host_keys` was used. Keys the server stops
+            offering are never removed.
 
             .. warning::
                 This parameter is **incompatible** with all other
@@ -348,6 +369,8 @@ class SSHClient(ClosingContextManager):
             Added the ``transport_factory`` argument.
         .. versionchanged:: 3.2
             Added the ``auth_strategy`` argument.
+        .. versionchanged:: 5.1
+            Added the ``update_host_keys`` argument.
         """
         if not sock:
             errors = {}
@@ -392,6 +415,7 @@ class SSHClient(ClosingContextManager):
             sock,
             disabled_algorithms=disabled_algorithms,
         )
+        t.update_host_keys = update_host_keys
         t.use_compression(compress=compress)
         if self._log_channel is not None:
             t.set_log_channel(self._log_channel)
@@ -458,6 +482,16 @@ class SSHClient(ClosingContextManager):
                 if our_key is None:
                     our_key = list(our_server_keys.values())[0]
                 raise BadHostKeyException(hostname, server_key, our_key)
+
+        if update_host_keys:
+            # The host key check above passed, so this connection is now
+            # known to be authenticated via a trusted host key; allow the
+            # transport to process any host key rotation offer, persisting
+            # verified new keys into our local host key store.
+            t.mark_host_key_trusted()
+            t.set_host_key_update_handler(
+                lambda keys: self._update_host_keys(server_hostkey_name, keys)
+            )
 
         if username is None:
             username = getpass.getuser()
