@@ -34,6 +34,7 @@ from paramiko.config import SSH_PORT
 from paramiko.ecdsakey import ECDSAKey
 from paramiko.ed25519key import Ed25519Key
 from paramiko.hostkeys import HostKeys
+from paramiko.message import Message
 from paramiko.rsakey import RSAKey
 from paramiko.ssh_exception import (
     BadHostKeyException,
@@ -75,6 +76,10 @@ class SSHClient(ClosingContextManager):
         self._policy = RejectPolicy()
         self._transport = None
         self._agent = None
+        self._update_hostkeys_enabled = False
+        self._update_hostkeys_callback = None
+        self._update_hostkeys_timeout = 5.0
+        self._hostkeys_update_notified = False
 
     def load_system_host_keys(self, filename=None):
         """
@@ -188,6 +193,43 @@ class SSHClient(ClosingContextManager):
         if inspect.isclass(policy):
             policy = policy()
         self._policy = policy
+
+    def enable_update_hostkeys(self, callback=None, timeout=5.0):
+        """
+        Opt in to learning rotated server host keys, using the OpenSSH
+        "hostkeys-00@openssh.com" / "hostkeys-prove-00@openssh.com"
+        protocol extensions (similar to OpenSSH's UpdateHostKeys option).
+
+        When enabled, each subsequent `connect` will, after authentication
+        succeeds:
+
+        * only proceed if the server's current host key was verified against
+          previously known/trusted host keys (connections authenticated via a
+          missing-host-key policy such as `.AutoAddPolicy` are skipped);
+        * collect any new host keys the server offers, and require the server
+          to prove ownership of each one, with signatures bound to this
+          connection's session identifier (so proofs can never be replayed
+          from an earlier connection);
+        * add only the keys with valid proofs to the in-memory host keys
+          (see `get_host_keys`). Keys the server stops advertising are never
+          removed automatically, and nothing is written to disk -- use
+          `save_host_keys` (typically from within the callback) if you want
+          to persist the update.
+
+        :param callback:
+            optional callable invoked at most once per connection, as
+            "callback(hostname, keys)", with the list of newly verified
+            `.PKey` objects, after the entire candidate set has been
+            verified. Useful for deciding how to persist the update.
+        :param float timeout:
+            how long to wait for the server's host key offer after
+            authentication, in seconds.
+
+        .. versionadded:: 5.1
+        """
+        self._update_hostkeys_enabled = True
+        self._update_hostkeys_callback = callback
+        self._update_hostkeys_timeout = timeout
 
     def _families_and_addresses(self, hostname, port):
         """
@@ -416,6 +458,11 @@ class SSHClient(ClosingContextManager):
             # TODO: it should be analogous to running paramiko w/ a
             # ~/.ssh/known_hosts file
             our_server_keys = self._host_keys.get(server_hostkey_name)
+        # Host key learning (see enable_update_hostkeys) is only allowed when
+        # this connection authenticates via an already-trusted host key, and
+        # any verified update is only reported once per connection.
+        host_key_trusted = our_server_keys is not None
+        self._hostkeys_update_notified = False
         if our_server_keys is not None:
             # TODO: keytype needs to turn into one of the rsa-sha2 keys if it's
             # an RSAKey.
@@ -464,7 +511,9 @@ class SSHClient(ClosingContextManager):
 
         # New auth flow!
         if auth_strategy is not None:
-            return auth_strategy.authenticate(transport=t)
+            result = auth_strategy.authenticate(transport=t)
+            self._learn_hostkeys(server_hostkey_name, host_key_trusted)
+            return result
 
         # Old auth flow!
         if key_filename is None:
@@ -483,6 +532,7 @@ class SSHClient(ClosingContextManager):
             look_for_keys,
             passphrase,
         )
+        self._learn_hostkeys(server_hostkey_name, host_key_trusted)
 
     def close(self):
         """
@@ -781,6 +831,85 @@ class SSHClient(ClosingContextManager):
 
     def _log(self, level, msg):
         self._transport._log(level, msg)
+
+    def _learn_hostkeys(self, hostname, host_key_trusted):
+        # OpenSSH hostkeys-00@openssh.com / hostkeys-prove-00@openssh.com
+        # client-side update flow; see enable_update_hostkeys.
+        if not (self._update_hostkeys_enabled and host_key_trusted):
+            return
+        transport = self._transport
+        if (
+            transport is None
+            or not transport.is_active()
+            or not transport.is_authenticated()
+        ):
+            return
+        candidates = transport.get_hostkeys_update_candidates(
+            timeout=self._update_hostkeys_timeout
+        )
+        if not candidates:
+            return
+        # Only brand-new keys need proofs; dedupe the offer by key blob so
+        # repeated candidates are only ever verified (and stored) once.
+        new_keys = []
+        seen = set()
+        for key in candidates:
+            blob = key.asbytes()
+            if blob in seen:
+                continue
+            seen.add(blob)
+            if self._host_keys.check(hostname, key):
+                continue
+            if self._system_host_keys.check(hostname, key):
+                continue
+            new_keys.append(key)
+        if not new_keys:
+            return
+        signatures = transport.request_hostkeys_prove(new_keys)
+        verified = self._verify_hostkey_proofs(transport, new_keys, signatures)
+        if not verified:
+            return
+        # The entire candidate set has been verified at this point; update
+        # the in-memory host keys (never removing keys the server stopped
+        # advertising) and let the caller decide about persistence.
+        for key in verified:
+            self._host_keys.add(hostname, key.get_name(), key)
+        if not self._hostkeys_update_notified:
+            self._hostkeys_update_notified = True
+            if self._update_hostkeys_callback is not None:
+                self._update_hostkeys_callback(hostname, verified)
+
+    def _verify_hostkey_proofs(self, transport, keys, signatures):
+        if not signatures:
+            return []
+        session_id = transport.session_id
+        if session_id is None:
+            return []
+        verified = []
+        # zip() silently drops any keys the server failed to return a proof
+        # for; those keys simply never become verified.
+        for key, signature in zip(keys, signatures):
+            proof = Message()
+            proof.add_string(b"hostkeys-prove-00@openssh.com")
+            proof.add_string(session_id)
+            proof.add_string(key.asbytes())
+            try:
+                valid = key.verify_ssh_sig(bytes(proof), Message(signature))
+            except Exception as e:
+                self._log(
+                    DEBUG,
+                    "Error verifying host key proof: {}".format(e),
+                )
+                valid = False
+            if valid:
+                verified.append(key)
+            else:
+                self._log(
+                    DEBUG,
+                    "Rejected {} host key offer: "
+                    "bad proof of possession".format(key.get_name()),
+                )
+        return verified
 
 
 class MissingHostKeyPolicy:

@@ -529,6 +529,9 @@ class Transport(threading.Thread, ClosingContextManager):
         self.auth_handler = None
         # response Message from an arbitrary global request
         self.global_response = None
+        # candidate host keys learned via OpenSSH hostkeys-00@openssh.com
+        self._hostkeys_update_candidates = None
+        self._hostkeys_update_event = threading.Event()
         # user-defined event callbacks
         self.completion_event = None
         # how long (seconds) to wait for the SSH banner
@@ -1244,6 +1247,62 @@ class Transport(threading.Thread, ClosingContextManager):
             if self.completion_event.is_set():
                 break
         return self.global_response
+
+    def get_hostkeys_update_candidates(self, timeout=None):
+        """
+        Return any new host keys offered by the server via the OpenSSH
+        ``hostkeys-00@openssh.com`` extension, waiting up to ``timeout``
+        seconds for the offer to arrive.
+
+        This is only meaningful for client-mode transports, after
+        authentication has completed; servers which support the extension
+        send their offer immediately after authenticating.
+
+        Only the first offer received on a given connection is honored, so
+        proofs of possession (see `request_hostkeys_prove`) are always bound
+        to this connection's session and cannot be replayed from, or into, a
+        different connection.
+
+        :param float timeout:
+            how long to wait for an offer, in seconds; ``None`` waits
+            forever.
+        :return:
+            a list of `.PKey` objects, or ``None`` if no offer arrived
+            within the timeout.
+
+        .. versionadded:: 5.1
+        """
+        if not self._hostkeys_update_event.wait(timeout):
+            return None
+        return list(self._hostkeys_update_candidates)
+
+    def request_hostkeys_prove(self, keys):
+        """
+        Ask the server to prove ownership of the private half of each key in
+        ``keys``, via the OpenSSH ``hostkeys-prove-00@openssh.com``
+        extension.
+
+        Each returned signature is over the request name, this connection's
+        session identifier, and the public key blob, so proofs cannot be
+        replayed across connections.
+
+        :param keys: an iterable of `.PKey` objects to request proofs for.
+        :return:
+            a list of signature blobs (as ``bytes``) parallel to
+            ``keys``, or ``None`` if the server denied the request.
+
+        .. versionadded:: 5.1
+        """
+        data = tuple(key.asbytes() for key in keys)
+        response = self.global_request(
+            "hostkeys-prove-00@openssh.com", data, wait=True
+        )
+        if response is None:
+            return None
+        signatures = []
+        while response.get_remainder():
+            signatures.append(response.get_string())
+        return signatures
 
     def accept(self, timeout=None):
         """
@@ -2790,11 +2849,15 @@ class Transport(threading.Thread, ClosingContextManager):
         self._log(DEBUG, 'Received global request "{}"'.format(kind))
         want_reply = m.get_boolean()
         if not self.server_mode:
-            self._log(
-                DEBUG,
-                'Rejecting "{}" global request from server.'.format(kind),
-            )
-            ok = False
+            if kind == "hostkeys-00@openssh.com":
+                self._parse_hostkeys_update(m)
+                ok = True
+            else:
+                self._log(
+                    DEBUG,
+                    'Rejecting "{}" global request from server.'.format(kind),
+                )
+                ok = False
         elif kind == "tcpip-forward":
             address = m.get_text()
             port = m.get_int()
@@ -2826,6 +2889,28 @@ class Transport(threading.Thread, ClosingContextManager):
         self.global_response = m
         if self.completion_event is not None:
             self.completion_event.set()
+
+    def _parse_hostkeys_update(self, m):
+        # Remainder of a hostkeys-00@openssh.com global request is a sequence
+        # of public key blobs.
+        if self._hostkeys_update_event.is_set():
+            # Only the first offer per connection is honored; later ones
+            # could otherwise be used to confuse proof verification.
+            self._log(DEBUG, "Ignoring duplicate hostkeys-00@openssh.com")
+            return
+        keys = []
+        while m.get_remainder():
+            blob = m.get_string()
+            try:
+                key_type = Message(blob).get_text()
+                keys.append(PKey.from_type_string(key_type, blob))
+            except Exception as e:
+                self._log(
+                    DEBUG, "Ignoring unparsable host key offer: {}".format(e)
+                )
+        self._log(DEBUG, "Server offered {} host key(s)".format(len(keys)))
+        self._hostkeys_update_candidates = keys
+        self._hostkeys_update_event.set()
 
     def _parse_request_failure(self, m):
         self._log(DEBUG, "Global request denied.")
