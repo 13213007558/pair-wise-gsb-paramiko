@@ -30,6 +30,7 @@ from paramiko.common import DEBUG, io_sleep
 
 from paramiko.file import BufferedFile
 from paramiko.util import u
+from paramiko.ssh_exception import SSHException
 from paramiko.sftp import (
     CMD_CLOSE,
     CMD_READ,
@@ -71,6 +72,17 @@ class SFTPFile(BufferedFile):
         self._prefetch_lock = threading.Lock()
         self._saved_exception = None
         self._reqs = deque()
+        # request number -> (offset, length) for write requests whose
+        # server response has not been received yet
+        self._pending_writes = {}
+        # request number -> (offset, length, exception) for writes the
+        # server replied to with an error status; entries are consumed by
+        # confirm_writes()
+        self._write_failures = {}
+        # guards _pending_writes/_write_failures; also held across request
+        # submission so a fast response cannot be dispatched before the
+        # request's offset/length has been recorded
+        self._write_lock = threading.Lock()
 
     def __del__(self):
         self._close(async_=True)
@@ -93,7 +105,13 @@ class SFTPFile(BufferedFile):
             return
         self.sftp._log(DEBUG, "close({})".format(u(hexlify(self.handle))))
         if self.pipelined:
-            self.sftp._finish_responses(self)
+            try:
+                self.sftp._finish_responses(self)
+            except (SSHException, socket.error):
+                # the connection is gone: any writes still in
+                # _pending_writes remain unconfirmed (their result is
+                # unknown) and can be inspected via confirm_writes()
+                pass
         BufferedFile.close(self)
         try:
             if async_:
@@ -105,7 +123,7 @@ class SFTPFile(BufferedFile):
         except EOFError:
             # may have outlived the Transport connection
             pass
-        except (IOError, socket.error):
+        except (IOError, socket.error, SSHException):
             # may have outlived the Transport connection
             pass
 
@@ -192,20 +210,35 @@ class SFTPFile(BufferedFile):
     def _write(self, data):
         # may write less than requested if it would exceed max packet size
         chunk = min(len(data), self.MAX_REQUEST_SIZE)
-        sftp_async_request = self.sftp._async_request(
-            type(None),
-            CMD_WRITE,
-            self.handle,
-            int64(self._realpos),
-            data[:chunk],
-        )
+        offset = self._realpos
+        with self._write_lock:
+            # hold the lock across the submission so that the response
+            # cannot be dispatched (and looked up in _pending_writes)
+            # before the offset/length of this request has been recorded
+            sftp_async_request = self.sftp._async_request(
+                self,
+                CMD_WRITE,
+                self.handle,
+                int64(offset),
+                data[:chunk],
+            )
+            self._pending_writes[sftp_async_request] = (offset, chunk)
         self._reqs.append(sftp_async_request)
         if not self.pipelined or (
             len(self._reqs) > 100 and self.sftp.sock.recv_ready()
         ):
             while len(self._reqs):
                 req = self._reqs.popleft()
-                t, msg = self.sftp._read_response(req)
+                with self._write_lock:
+                    if req not in self._pending_writes:
+                        # response already arrived out of order and was
+                        # dispatched asynchronously; nothing to wait for
+                        continue
+                try:
+                    t, msg = self.sftp._read_response(req)
+                finally:
+                    with self._write_lock:
+                        self._pending_writes.pop(req, None)
                 if t != CMD_STATUS:
                     raise SFTPError("Expected status")
                 # convert_status already called
@@ -425,6 +458,12 @@ class SFTPFile(BufferedFile):
         with one of your later writes, an exception might be thrown from within
         `.close` instead of `.write`.
 
+        Note that while pipelining is on, a successful return from `.write`
+        (or `.flush`) only means the data was sent to the server, not that
+        the server accepted it.  Use `.confirm_writes` to explicitly wait
+        for the server to acknowledge all writes submitted so far and to
+        find out which byte ranges, if any, were rejected.
+
         By default, files are not pipelined.
 
         :param bool pipelined:
@@ -434,6 +473,75 @@ class SFTPFile(BufferedFile):
         .. versionadded:: 1.5
         """
         self.pipelined = pipelined
+
+    def confirm_writes(self):
+        """
+        Wait for the server to acknowledge all write requests submitted so
+        far, and report which of them failed.
+
+        This is an explicit confirmation barrier for pipelined writes (see
+        `.set_pipelined`):
+
+        - Any data still sitting in the local write buffer is sent first
+          (as if `.flush` had been called), so everything passed to
+          `.write` before this call is covered by the barrier.
+        - The call blocks until every write request submitted before this
+          call has received its response from the server.  Responses may
+          arrive out of order; each one is matched to its original request
+          by request number.  Writes submitted after this call begins are
+          not part of the wait.
+        - Responses belonging to other `.SFTPFile` objects or to other
+          requests (reads, stats, ...) on the same connection are
+          dispatched to their rightful owners while waiting, never
+          consumed or blocked by this barrier.
+
+        The relationship with `.flush` and `.close`:
+
+        - `.flush` only pushes buffered data onto the wire; it does not
+          wait for the server to confirm anything.
+        - `.close` performs an implicit wait for outstanding responses
+          (so the file handle is not closed out from under in-flight
+          writes), but it does not raise write errors -- they are only
+          reported through this method.  Call ``confirm_writes()`` before
+          `.close` if you need to know whether your writes were accepted.
+
+        If the connection drops while waiting, an
+        `.ssh_exception.SSHException` is raised and the still-unconfirmed
+        writes are left in "result unknown" state: they are neither
+        reported as succeeded nor reported as failed, because the server
+        may or may not have applied them.
+
+        :return:
+            a list of ``(offset, length, exception)`` tuples, one per
+            failed write, sorted by offset; an empty list means all
+            writes submitted so far were acknowledged successfully.  Each
+            failure is reported only once: later calls do not repeat
+            failures already returned by an earlier call.
+
+        .. versionadded:: 5.0
+        """
+        # push any buffered data out so it is covered by the barrier
+        self.flush()
+        # snapshot the requests submitted so far; writes submitted after
+        # this point are not part of this wait
+        with self._write_lock:
+            pending = set(self._pending_writes)
+        while True:
+            with self._write_lock:
+                waiting = any(num in self._pending_writes for num in pending)
+            if not waiting:
+                break
+            # block for the next response; responses for other files or
+            # requests are dispatched to their owners by _read_response
+            self.sftp._read_response()
+        failures = []
+        with self._write_lock:
+            for num in pending:
+                failure = self._write_failures.pop(num, None)
+                if failure is not None:
+                    failures.append(failure)
+        failures.sort(key=lambda failure: failure[0])
+        return failures
 
     def prefetch(self, file_size=None, max_concurrent_requests=None):
         """
@@ -566,6 +674,19 @@ class SFTPFile(BufferedFile):
 
     def _async_response(self, t, msg, num):
         if t == CMD_STATUS:
+            # a status response may belong to a pipelined write; match it
+            # to the original request so failures can be reported with
+            # their offset/length by confirm_writes()
+            with self._write_lock:
+                write_req = self._pending_writes.pop(num, None)
+            if write_req is not None:
+                try:
+                    self.sftp._convert_status(msg)
+                except Exception as e:
+                    offset, length = write_req
+                    with self._write_lock:
+                        self._write_failures[num] = (offset, length, e)
+                return
             # save exception and re-raise it on next file operation
             try:
                 self.sftp._convert_status(msg)
