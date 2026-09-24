@@ -8,7 +8,11 @@ Replaces certain parts of `.SSHClient`. For a concrete implementation, see the
 from collections import namedtuple
 
 from .agent import AgentKey
-from .ssh_exception import AuthenticationException
+from .ssh_exception import (
+    AuthenticationException,
+    BadAuthenticationType,
+    PartialAuthentication,
+)
 from .util import get_logger
 
 
@@ -20,6 +24,11 @@ class AuthSource:
 
     All implementations must accept at least a ``username`` (``str``) kwarg.
     """
+
+    #: SSH userauth method names this source may speak, or ``None`` when
+    #: unknown. `AuthStrategy` uses this to skip sources the server has
+    #: already said it will not accept.
+    methods = None
 
     def __init__(self, username):
         self.username = username
@@ -46,6 +55,8 @@ class NoneAuth(AuthSource):
     Auth type "none", ie https://www.rfc-editor.org/rfc/rfc4252#section-5.2 .
     """
 
+    methods = ("none",)
+
     def authenticate(self, transport):
         return transport.auth_none(self.username)
 
@@ -64,6 +75,11 @@ class Password(AuthSource):
         also, shame on you!) or ``lambda: variable_name`` (for something stored
         in a variable).
     """
+
+    # NOTE: 'keyboard-interactive' included because Transport.auth_password
+    # automatically falls back to it when the server doesn't allow 'password'
+    # but does allow interactive auth.
+    methods = ("password", "keyboard-interactive")
 
     def __init__(self, username, password_getter):
         super().__init__(username=username)
@@ -98,6 +114,8 @@ class PrivateKey(AuthSource):
     either in their ``__init__``, or in an overridden ``authenticate`` prior to
     its `super` call.
     """
+
+    methods = ("publickey",)
 
     def authenticate(self, transport):
         return transport.auth_publickey(self.username, self.pkey)
@@ -266,22 +284,55 @@ class AuthStrategy:
         You *normally* won't need to override this, but it's an option for
         advanced users.
         """
-        succeeded = False
         overall_result = AuthResult(strategy=self)
         # TODO: arguably we could fit in a "send none auth, record allowed auth
         # types sent back" thing here as OpenSSH-client does, but that likely
         # wants to live in fabric.OpenSSHAuthStrategy as not all target servers
         # will implement it!
         # TODO: needs better "server told us too many attempts" checking!
+        # Auth methods the server has told us it's still willing to accept;
+        # None means "no idea yet, anything goes".
+        allowed = None
+        # Sources which already completed one stage of a multipart auth.
+        # Re-submitting the same credential for the same stage can't advance
+        # the process, so such sources get skipped if encountered again.
+        completed = []
         for source in self.get_sources():
+            # The one true success criterion: the transport considers itself
+            # authenticated _right now_ (don't wait until, say, channel open
+            # time to discover a multipart auth never finished).
+            if transport.is_authenticated():
+                break
+            # Skip sources whose methods the server has ruled out.
+            if (
+                allowed is not None
+                and source.methods is not None
+                and not any(method in allowed for method in source.methods)
+            ):
+                self.log.debug(
+                    f"Skipping {source}: server only allows {allowed}"
+                )
+                continue
+            # Skip sources which already completed a stage (eg a generator
+            # yielding the same credential twice).
+            if any(source is previous for previous in completed):
+                self.log.debug(
+                    f"Skipping {source}: already completed an auth stage"
+                )
+                continue
             self.log.debug(f"Trying {source}")
             try:  # NOTE: this really wants to _only_ wrap the authenticate()!
                 result = source.authenticate(transport)
-                succeeded = True
-            # TODO: 'except PartialAuthentication' is needed for 2FA and
-            # similar, as per old SSHClient.connect - it is the only way
-            # AuthHandler supplies access to the 'name-list' field from
-            # MSG_USERAUTH_FAILURE, at present.
+            # Multipart auth (eg 2FA), exception flavor: one stage succeeded,
+            # server says which methods it still accepts.
+            except PartialAuthentication as e:
+                result = e
+                allowed = list(e.allowed_types)
+                completed.append(source)
+                self.log.info(
+                    f"Partial authentication via {source}; "
+                    f"server now allows {allowed}"
+                )
             except Exception as e:
                 result = e
                 # TODO: look at what this could possibly raise, we don't really
@@ -294,12 +345,25 @@ class AuthStrategy:
                 self.log.info(
                     f"Authentication via {source} failed with {source_class}"
                 )
+                # Failures may still tell us what the server accepts; honor
+                # that when picking subsequent sources.
+                if isinstance(e, BadAuthenticationType):
+                    allowed = list(e.allowed_types)
+            else:
+                # Multipart auth, return-value flavor: Transport auth methods
+                # hand back the list of still-acceptable methods when a stage
+                # succeeds but full authentication isn't finished.
+                if isinstance(result, (list, tuple)) and result:
+                    allowed = list(result)
+                    completed.append(source)
+                    self.log.info(
+                        f"Partial authentication via {source}; "
+                        f"server now allows {allowed}"
+                    )
             overall_result.append(SourceResult(source, result))
-            if succeeded:
-                break
         # Gotta die here if nothing worked, otherwise Transport's main loop
         # just kinda hangs out until something times out!
-        if not succeeded:
+        if not transport.is_authenticated():
             raise AuthFailure(result=overall_result)
         # Success: give back what was done, in case they care.
         return overall_result

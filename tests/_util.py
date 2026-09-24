@@ -88,6 +88,7 @@ unicodey = "\u2022"
 class TestServer(ServerInterface):
     paranoid_did_password = False
     paranoid_did_public_key = False
+    interactive_did_public_key = False
     paranoid_key = Ed25519Key.from_private_key_file(_support("ed25519.key"))
 
     def __init__(self, allowed_keys=None):
@@ -157,6 +158,10 @@ class TestServer(ServerInterface):
                 return "password"
         if username == "commie":
             return "keyboard-interactive"
+        if username == "paranoid-interactive":
+            if self.interactive_did_public_key:
+                return "keyboard-interactive"
+            return "publickey,keyboard-interactive"
         if username == "utf8":
             return "password"
         if username == "non-utf8":
@@ -190,6 +195,12 @@ class TestServer(ServerInterface):
             if self.paranoid_did_password:
                 return AUTH_SUCCESSFUL
             return AUTH_PARTIALLY_SUCCESSFUL
+        if (username == "paranoid-interactive") and (
+            key == self.paranoid_key
+        ):
+            # 2-part auth: publickey, then keyboard-interactive
+            self.interactive_did_public_key = True
+            return AUTH_PARTIALLY_SUCCESSFUL
         # TODO: make sure all tests incidentally using this to pass, _without
         # sending a username oops_, get updated somehow - probably via server()
         # default always injecting a username
@@ -198,7 +209,7 @@ class TestServer(ServerInterface):
         return AUTH_FAILED
 
     def check_auth_interactive(self, username, submethods):
-        if username == "commie":
+        if username in ("commie", "paranoid-interactive"):
             self.username = username
             return InteractiveQuery(
                 "password", "Please enter a password.", ("Password", False)
@@ -208,6 +219,9 @@ class TestServer(ServerInterface):
     def check_auth_interactive_response(self, responses):
         if self.username == "commie":
             if (len(responses) == 1) and (responses[0] == "cat"):
+                return AUTH_SUCCESSFUL
+        if self.username == "paranoid-interactive":
+            if (len(responses) == 1) and (responses[0] == "paranoid"):
                 return AUTH_SUCCESSFUL
         return AUTH_FAILED
 

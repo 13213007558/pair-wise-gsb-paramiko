@@ -28,6 +28,7 @@ from paramiko import (
     SourceResult,
     SSHException,
 )
+from paramiko.ssh_exception import PartialAuthentication
 
 from ._util import (
     _support,
@@ -422,6 +423,9 @@ class AuthStrategy_:
             self.source, self.transport = NoneAuth(None), Mock()
             self.source.authenticate = Mock()
             self.strat.get_sources = Mock(return_value=[self.source])
+            # Strategy loop keys off Transport.is_authenticated; default to
+            # "not authenticated yet, then authenticated once a source ran".
+            self.transport.is_authenticated.side_effect = [False, True, True]
 
         def requires_and_uses_transport_with_methods_returning_result(self):
             with raises(TypeError):
@@ -444,6 +448,8 @@ class AuthStrategy_:
 
         def raises_AuthFailure_if_no_successes(self):
             self.strat.log = Mock()
+            self.transport.is_authenticated.side_effect = None
+            self.transport.is_authenticated.return_value = False
             oops = Exception("onoz")
             self.source.authenticate.side_effect = oops
             with raises(AuthFailure) as info:
@@ -468,3 +474,150 @@ class AuthStrategy_:
             # And it did not capture any attempt to execute the 2nd source
             assert len(result) == 1
             assert result[0].source is self.source
+
+        def stops_immediately_if_transport_already_authenticated(self):
+            self.transport.is_authenticated.side_effect = None
+            self.transport.is_authenticated.return_value = True
+            result = self.strat.authenticate(self.transport)
+            assert result == []
+            self.source.authenticate.assert_not_called()
+
+        def _key_and_password_sources(self, key_result):
+            key = PrivateKey(username="foo")
+            key.pkey = Mock()
+            key.authenticate = Mock(return_value=key_result)
+            password = Password("foo", password_getter=Mock())
+            password.authenticate = Mock(return_value=[])
+            return key, password
+
+        def partial_success_via_returned_methods_continues_to_next_source(
+            self,
+        ):
+            key, password = self._key_and_password_sources(["password"])
+            self.strat.get_sources.return_value = [key, password]
+            self.transport.is_authenticated.side_effect = [False, False, True]
+            result = self.strat.authenticate(self.transport)
+            assert len(result) == 2
+            assert result[0].source is key
+            assert result[0].result == ["password"]
+            assert result[1].source is password
+            assert result[1].result == []
+
+        def partial_success_via_exception_continues_to_next_source(self):
+            key, password = self._key_and_password_sources(None)
+            partial = PartialAuthentication(["password"])
+            key.authenticate = Mock(side_effect=partial)
+            self.strat.get_sources.return_value = [key, password]
+            self.transport.is_authenticated.side_effect = [False, False, True]
+            result = self.strat.authenticate(self.transport)
+            assert len(result) == 2
+            assert result[0].source is key
+            assert result[0].result is partial
+            assert result[1].source is password
+            assert result[1].result == []
+
+        def sources_not_matching_server_allowed_methods_are_skipped(self):
+            key, password = self._key_and_password_sources(["password"])
+            none = NoneAuth("foo")
+            none.authenticate = Mock(return_value=[])
+            self.strat.get_sources.return_value = [key, none, password]
+            self.transport.is_authenticated.side_effect = [
+                False,
+                False,
+                False,
+                True,
+            ]
+            result = self.strat.authenticate(self.transport)
+            # 'none' not in server-allowed remainder, so never attempted
+            none.authenticate.assert_not_called()
+            password.authenticate.assert_called_once_with(self.transport)
+            assert [x.source for x in result] == [key, password]
+
+        def sources_are_not_resubmitted_for_completed_stages(self):
+            key, password = self._key_and_password_sources(
+                ["publickey", "password"]
+            )
+            # Same credential yielded twice (eg agent + on-disk discovery)
+            self.strat.get_sources.return_value = [key, password, key]
+            self.transport.is_authenticated.side_effect = [
+                False,
+                False,
+                False,
+                True,
+            ]
+            result = self.strat.authenticate(self.transport)
+            assert key.authenticate.call_count == 1
+            assert [x.source for x in result] == [key, password]
+
+        def raises_AuthFailure_when_only_partially_authenticated(self):
+            self.source.authenticate.return_value = ["password"]
+            self.transport.is_authenticated.side_effect = None
+            self.transport.is_authenticated.return_value = False
+            with raises(AuthFailure) as info:
+                self.strat.authenticate(self.transport)
+            result = info.value.result
+            assert len(result) == 1
+            assert result[0].source is self.source
+            assert result[0].result == ["password"]
+
+    class multipart:
+        """
+        Live-server tests of multi-stage (eg 2FA) authentication.
+        """
+
+        def setup_method(self):
+            self.key = Ed25519Key.from_private_key_file(
+                _support("ed25519.key")
+            )
+
+        def _strat(self, *sources):
+            strat = AuthStrategy(None)
+            strat.get_sources = Mock(return_value=list(sources))
+            return strat
+
+        def publickey_then_password(self):
+            with server(defer=True) as (tc, ts):
+                strat = self._strat(
+                    InMemoryPrivateKey(username="paranoid", pkey=self.key),
+                    Password("paranoid", password_getter=lambda: "paranoid"),
+                )
+                result = strat.authenticate(tc)
+                assert tc.is_authenticated()
+                assert len(result) == 2
+                assert result[0].result == ["password"]
+                assert result[1].result == []
+
+        def publickey_then_keyboard_interactive(self):
+            with server(defer=True) as (tc, ts):
+                strat = self._strat(
+                    InMemoryPrivateKey(
+                        username="paranoid-interactive", pkey=self.key
+                    ),
+                    Password(
+                        "paranoid-interactive",
+                        password_getter=lambda: "paranoid",
+                    ),
+                )
+                result = strat.authenticate(tc)
+                assert tc.is_authenticated()
+                assert len(result) == 2
+                assert result[0].result == ["keyboard-interactive"]
+                assert result[1].result == []
+
+        def second_stage_failure_raises_AuthFailure_keeping_all_stages(self):
+            with server(defer=True) as (tc, ts):
+                strat = self._strat(
+                    InMemoryPrivateKey(username="paranoid", pkey=self.key),
+                    Password("paranoid", password_getter=lambda: "wrongpass"),
+                )
+                with raises(AuthFailure) as info:
+                    strat.authenticate(tc)
+                assert not tc.is_authenticated()
+                result = info.value.result
+                assert len(result) == 2
+                # Partial first stage kept as its remaining-methods list
+                assert result[0].result == ["password"]
+                # Failed second stage kept as its exception
+                assert isinstance(result[1].result, AuthenticationException)
+                # Secrets don't leak into the stringified result
+                assert "wrongpass" not in str(info.value)
