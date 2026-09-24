@@ -1,0 +1,2129 @@
+
+AgentKey 
+
+    str is repr
+
+    init
+
+        needs at least two arguments
+        sets attributes and parses blob
+        comment optional
+        sets inner key when known type[ssh-rsa]
+
+    fields
+
+        defers to inner key when present[ssh-rsa]
+
+    get bits
+
+        defers to inner key when present[ssh-rsa]
+
+    asbytes
+
+        defers to inner key when present[ssh-rsa]
+
+PKey 
+
+    from type string
+
+        loads from type and bytes[ssh-rsa]
+        accepts passphrase[ssh-rsa]
+
+    from path
+
+        loads from Path[ssh-rsa]
+    fingerprint[ssh-rsa]
+    algorithm name[ssh-rsa]
+
+    equality and hashing
+
+        same key is equal to itself[ssh-rsa]
+        same key same hash[ssh-rsa]
+        keys are not equal to other types[ssh-rsa]
+        sets inner key when known type[rsa-sha2-512]
+        defers to inner key when present[rsa-sha2-512]
+        defers to inner key when present[rsa-sha2-512]
+        defers to inner key when present[rsa-sha2-512]
+        loads from type and bytes[rsa-sha2-512]
+        accepts passphrase[rsa-sha2-512]
+        loads from Path[rsa-sha2-512]
+    fingerprint[rsa-sha2-512]
+    algorithm name[rsa-sha2-512]
+        same key is equal to itself[rsa-sha2-512]
+        same key same hash[rsa-sha2-512]
+        keys are not equal to other types[rsa-sha2-512]
+        sets inner key when known type[ssh-ed25519]
+        defers to inner key when present[ssh-ed25519]
+        defers to inner key when present[ssh-ed25519]
+        defers to inner key when present[ssh-ed25519]
+        loads from type and bytes[ssh-ed25519]
+        accepts passphrase[ssh-ed25519]
+        loads from Path[ssh-ed25519]
+    fingerprint[ssh-ed25519]
+    algorithm name[ssh-ed25519]
+        same key is equal to itself[ssh-ed25519]
+        same key same hash[ssh-ed25519]
+        keys are not equal to other types[ssh-ed25519]
+        sets inner key when known type[ecdsa-sha2-nistp256]
+        defers to inner key when present[ecdsa-sha2-nistp256]
+        defers to inner key when present[ecdsa-sha2-nistp256]
+        defers to inner key when present[ecdsa-sha2-nistp256]
+        loads from type and bytes[ecdsa-sha2-nistp256]
+        accepts passphrase[ecdsa-sha2-nistp256]
+        loads from Path[ecdsa-sha2-nistp256]
+    fingerprint[ecdsa-sha2-nistp256]
+    algorithm name[ecdsa-sha2-nistp256]
+        same key is equal to itself[ecdsa-sha2-nistp256]
+        same key same hash[ecdsa-sha2-nistp256]
+        keys are not equal to other types[ecdsa-sha2-nistp256]
+        defaults to get name and blob
+        defaults to superclass implementation
+        defaults to owned blob
+    signing data[algo=default-flag=0-cert=True]
+    signing data[algo=default-flag=0-cert=False]
+    signing data[algo=rsa-sha2-256-flag=2-cert=True]
+    signing data[algo=rsa-sha2-256-flag=2-cert=False]
+    signing data[algo=rsa-sha2-512-flag=4-cert=True]
+    signing data[algo=rsa-sha2-512-flag=4-cert=False]
+    signing data[algo=rsa-sha2-256-cert-v01@openssh.com-flag=2-cert=True]
+    signing data[algo=rsa-sha2-256-cert-v01@openssh.com-flag=2-cert=False]
+    signing data[algo=rsa-sha2-512-cert-v01@openssh.com-flag=4-cert=True]
+    signing data[algo=rsa-sha2-512-cert-v01@openssh.com-flag=4-cert=False]
+
+AuthHandler 
+
+    bad auth type
+    bad password
+    multipart auth
+    interactive auth
+    interactive fallback
+    utf8
+    non utf8
+    auth exception when disconnected
+    non responsive triggers auth exception
+
+SHA2SignaturePubkeys
+
+    pubkey auth honors disabled algorithms
+    first client preferred algo used when no server sig algs
+    sha2 512
+    sha2 256
+
+AuthSource 
+
+    base class
+
+        init requires and saves username
+        dunder repr delegates to helper
+        repr helper prints basic kv pairs
+        authenticate takes transport and is abstract
+
+    NoneAuth 
+
+        authenticate auths none
+        repr shows class
+
+    Password 
+
+        init takes and stores password getter
+        repr adds username
+        authenticate gets and supplies password
+
+    PrivateKey 
+
+        authenticate calls publickey with pkey
+
+    InMemoryPrivateKey 
+
+        init takes pkey object
+        repr shows pkey repr
+        repr appends agent flag when AgentKey
+
+    OnDiskPrivateKey 
+
+        init takes source path and pkey
+        init requires specific value for source
+        repr reflects source path and pkey
+
+AuthResult 
+
+    acts like list with strategy attribute
+    repr is list repr untouched
+
+    dunder str
+
+        is multiline display of sourceresult tuples
+        shows str not repr of auth source and result
+        empty list result values show success string
+
+AuthFailure 
+
+    is an AuthenticationException
+    init requires result
+    str is newline plus result str
+
+AuthStrategy 
+
+    init requires ssh config param and sets up a logger
+    get sources is abstract
+
+    authenticate
+
+        requires and uses transport with methods returning result
+        logs sources attempted
+        raises AuthFailure if no successes
+        short circuits on successful auth
+        skips sources whose methods server does not allow
+        does not resubmit source which completed a stage
+        treats PartialAuthentication exception as partial success
+
+AuthStrategy multipart
+
+    publickey then password
+    publickey then keyboard interactive
+    second stage failure raises AuthFailure
+        raises UnknownKeyType for unknown type names
+        loads from str
+        expands user
+        raises UnknownKeyType for unknown types
+        leaves cryptography exceptions untouched
+
+        automatically loads certificates
+
+            existing cert loaded when given key path
+            can be given cert path instead
+            no cert load if no cert
+            excepts usefully if no key only cert
+
+    load certificate
+
+        rsa public cert blobs
+        loading cert of different type from key raises ValueError
+
+    identifiers classmethods
+
+        default is class name attribute
+        rsa is all combos of cert and sha type
+        ed25519 is protocol name
+        ecdsa is all curve names
+
+    write private key and file
+
+        uses private key property[rsa.key-RSAPrivateKey]
+        uses private key property[ecdsa-256.key-EllipticCurvePrivateKey]
+        can write multiple formats[key format0-RSAKey-key kwargs0-RSA]
+        can write multiple formats[key format0-ECDSAKey-key kwargs1-EC]
+        can write multiple formats[key format1-RSAKey-key kwargs0-RSA]
+        can write multiple formats[key format1-ECDSAKey-key kwargs1-EC]
+
+Ed25519Key 
+
+    has non excepting repr during load errors
+
+BufferedPipe
+
+    buffered pipe
+    close while reading
+    delay
+    or pipe
+
+ChannelFile
+
+    defaults to unbuffered reading
+    can override mode and bufsize
+    read recvs from channel
+    write calls channel sendall
+
+ChannelStderrFile
+
+    read calls channel recv stderr
+    write calls channel sendall
+
+ChannelStdinFile
+
+    defaults to unbuffered reading
+    can override mode and bufsize
+    read recvs from channel
+    write calls channel sendall
+    close calls channel shutdown write
+
+SSHClient
+
+    auth trickledown
+    auto add policy
+    banner timeout
+    certs allowed as key filename values
+    certs implicitly loaded alongside key filename keys
+    channel timeout
+    cleanup
+    client
+    client can be used as context manager
+    client ecdsa
+    client ed25519
+    client rsa
+    closes socket on socket errors
+    default key locations trigger cert loads if found
+    disabled algorithms defaults to None
+    disabled algorithms passed directly if given
+    env update failures
+    host key negotiation 1
+    host key negotiation 2
+    host key negotiation 3
+    host key negotiation 4
+    missing key policy accepts classes or instances
+    multiple key files
+    multiple key files failure
+    reject policy
+    save host keys
+    transport factory defaults to Transport
+    transport factory may be specified
+    update environment
+
+PasswordPassphraseTests
+
+    passphrase kwarg not used for password auth
+    passphrase kwarg used for key passphrase
+    password kwarg not used for passphrase when passphrase kwarg given
+    password kwarg used for passphrase when no passphrase kwarg given
+    password kwarg works for password auth
+
+SSHConfig
+
+    init
+    from text
+    from file
+    from path
+    parse config
+    host config[irc.danger.com-values0]
+    host config[irc.example.com-values1]
+    host config[spoo.example.com-values2]
+    fabric issue 33
+    proxycommand config equals parsing
+    proxycommand interpolation
+    proxycommand tilde expansion
+    proxyjump token expansion
+    controlpath token expansion
+    negation
+    proxycommand
+    identityfile
+    config addressfamily and lazy fqdn
+    config dos crlf succeeds
+    get hostnames
+    quoted host names
+    quoted params in config
+    quoted host in config
+    invalid line format excepts
+    proxycommand none issue 415
+    proxycommand none masking
+    hostname tokenization
+
+SSHConfigDict
+
+    SSHConfigDict construct empty
+    SSHConfigDict construct from list
+    SSHConfigDict construct from dict
+    SSHConfigDict as bool true ish[yes]
+    SSHConfigDict as bool true ish[YES]
+    SSHConfigDict as bool true ish[Yes]
+    SSHConfigDict as bool true ish[True]
+    SSHConfigDict as bool[no]
+    SSHConfigDict as bool[NO]
+    SSHConfigDict as bool[No]
+    SSHConfigDict as bool[False]
+    SSHConfigDict as int[42 0]
+    SSHConfigDict as int[42 1]
+    SSHConfigDict as int failures[not an int]
+    SSHConfigDict as int failures[None]
+    SSHConfigDict as int failures[non int2]
+    SSHConfig host dicts are SSHConfigDict instances
+    SSHConfig wildcard host dicts are SSHConfigDict instances
+
+HostnameCanonicalization
+
+    off by default
+    explicit no same as default
+    canonicalization base cases[canon]
+    canonicalization base cases[canon-always]
+    canonicalization base cases[canon-local]
+    canonicalization base cases[canon-local-always]
+    uses getaddrinfo when AddressFamily given
+    CanonicalDomains may be set to space separated list
+    canonicalization applies to single dot by default
+    canonicalization not applied to two dots by default
+    hostname depth controllable with max dots directive
+    max dots may be zero
+    fallback yes does not canonicalize or error
+    fallback no causes errors for unresolvable names
+    identityfile continues being appended to
+
+MatchAll
+
+    always matches
+    may not mix with non canonical keywords
+    may come after canonical
+    may not come before canonical
+    after canonical not loaded when non canonicalized
+
+MatchExec
+
+    raises invoke ImportErrors at runtime
+    accepts single possibly quoted argument[unquoted-rando]
+    accepts single possibly quoted argument[quoted-benjamin]
+    accepts single possibly quoted argument[quoted spaced-neil]
+    does not match nonzero exit codes
+    tokenizes argument
+    works with canonical
+    may be negated
+    requires an argument
+    works with tokenized hostname
+
+MatchHost
+
+    matches target name when no hostname
+    matches hostname from global setting
+    matches hostname from earlier match
+    may be globbed
+    may be comma separated list
+    comma separated list may have internal negation
+    matches canonicalized name
+    works with canonical keyword
+    may be negated
+    requires an argument
+
+MatchOriginalHost
+
+    matches target host not hostname
+    matches target host not canonicalized name
+    may be globbed
+    may be comma separated list
+    comma separated list may have internal negation
+    may be negated
+    requires an argument
+
+MatchUser
+
+    matches configured username
+    matches local username by default
+    may be globbed
+    may be comma separated list
+    comma separated list may have internal negation
+    may be negated
+    requires an argument
+
+MatchLocalUser
+
+    matches local username
+    may be globbed
+    may be comma separated list
+    comma separated list may have internal negation
+    may be negated
+    requires an argument
+
+ComplexMatching
+
+    originalhost host
+    originalhost localuser
+    everything but all
+    everything but all with some negated
+    negated canonical
+
+FinalMatching
+
+    finally
+    default port
+    negated
+
+BufferedFile
+
+    buffering flushes
+    flush
+    lf
+    read all
+    readable
+    readinto
+    readline
+    simple
+    writable
+    write
+    write bad type
+    write bytearray
+    write memoryview
+    write unicode as binary
+
+HostKeys
+
+    add
+    delitem
+    dict
+    dict set
+    entry delitem
+    load
+
+HostKeysTabs
+
+    add
+    delitem
+    dict
+    dict set
+    entry delitem
+    load
+
+Kex
+
+    gex sha256 client
+    gex sha256 old client
+    gex sha256 server
+    gex sha256 server with old client
+    kex c25519 client
+    kex c25519 server
+    kex group14 sha256 client
+    kex group14 sha256 server
+    kex group16 sha512 client
+    kex group16 sha512 server
+    kex nistp256 client
+    kex nistp256 server
+
+MLKEM768X25519
+
+    is registered
+    rejects wrong init length
+    rejects wrong init length
+    rejects wrong init length
+    rejects wrong init length
+    rejects wrong init length
+    rejects wrong init length
+    rejects wrong init length
+    rejects wrong init length
+    rejects wrong reply length
+    rejects wrong reply length
+    rejects wrong reply length
+    rejects wrong reply length
+    rejects wrong reply length
+    rejects wrong reply length
+    rejects wrong reply length
+    round trip
+
+Message
+
+    add
+    bytes str and repr
+    decode
+    encode
+    misc
+
+Packetizer
+
+    closed
+    read
+    write
+
+Key
+
+    compare ecdsa 256
+    compare ecdsa 384
+    compare ecdsa 521
+    compare rsa
+    ed25519
+    ed25519 compare
+    ed25519 funky padding
+    ed25519 funky padding with passphrase
+    ed25519 load from file obj
+    ed25519 nonbytes password
+    existing keyfiles still work ok
+    generate ecdsa
+    generate key bytes
+    generate rsa
+    keyfile is actually encrypted
+    load ecdsa 256
+    load ecdsa 384
+    load ecdsa 521
+    load ecdsa password 256
+    load ecdsa password 384
+    load ecdsa password 521
+    load ecdsa transmutes crypto exceptions
+    load openssh format EC key
+    load openssh format RSA key
+    load openssh format RSA nopad
+    load rsa
+    load rsa password
+    load rsa transmutes crypto exceptions
+    loading empty keys errors usefully
+    loading openssh RSA keys uses correct p q
+    new keyfiles avoid descriptor race integration
+    new keyfiles avoid file descriptor race on chmod
+    salt size
+    sign and verify rsa sha2 256
+    sign and verify rsa sha2 512
+    sign ecdsa 256
+    sign ecdsa 384
+    sign ecdsa 521
+    stringification
+
+ProxyCommand
+
+    init takes command string
+    send writes to process stdin returning length
+    send raises ProxyCommandFailure on error
+    recv reads from process stdout returning bytes
+    recv returns buffer on timeout if any read
+    recv raises timeout if nothing read
+    recv raises ProxyCommandFailure on non timeout error
+    close kills subprocess
+    closed exposes whether subprocess has exited
+    timeout affects whether timeout is raised
+    raises subprocess ImportErrors at runtime
+
+SFTP
+
+    file
+    close
+    sftp can be used as context manager
+    write
+    sftp file can be used as context manager
+    append
+    rename
+    testa posix rename
+    folder
+    listdir
+    listdir iter
+    listdir in locale
+    setstat
+    fsetstat
+    readline seek
+    write seek
+    symlink
+    flush seek
+    realpath
+    mkdir
+    chdir
+    get put
+    get without prefetch
+    check
+    x flag
+    utf8
+    utf8 chdir
+    bad readv
+    put without confirm
+    getcwd
+    seek append
+    putfo empty file
+    non utf8 data
+    sftp attributes locale time
+    sftp attributes empty str
+    write memoryview
+
+BigSFTP
+
+    lots of files
+    big file
+    big file pipelined
+    prefetch seek
+    readv seek
+    lots of prefetching
+    prefetch readv
+    large readv
+    big file big buffer
+    big file renegotiate
+    prefetch limit
+
+NoValidConnectionsError
+
+    error message for multiple hosts
+    error message for single host
+    error message for two hosts
+    pickling
+
+ExceptionStringDisplay
+
+    BadAuthenticationType
+    BadHostKeyException
+    ChannelException
+    PartialAuthentication
+    ProxyCommandFailure
+
+Transport
+
+    can override packetizer used
+    channel can be used as context manager
+    channel exception
+    channel send memoryview
+    channel send misc
+    client does not respond to MSG UNIMPLEMENTED
+    compression
+    compute key
+    exec command
+    exit status
+    handshake timeout
+    invoke shell
+    keepalive
+    long banner
+    port forwarding
+    rekey deadlock
+    renegotiate
+    reverse port forwarding
+    sanitze packet size
+    sanitze window size
+    security options
+    select
+    select after close
+    send ready
+    server does not respond to MSG UNIMPLEMENTED
+    server rejects arbitrary global request without auth
+    server rejects client MSG USERAUTH SUCCESS
+    server rejects open channel without auth
+    server rejects port forward without auth
+    server transports reject client message types
+    simple
+    special
+    stderr select
+    x11
+    testb security options reset
+
+ServiceRequestingTransport
+
+    can override packetizer used
+    channel can be used as context manager
+    channel exception
+    channel send memoryview
+    channel send misc
+    client does not respond to MSG UNIMPLEMENTED
+    compression
+    compute key
+    exec command
+    exit status
+    handshake timeout
+    invoke shell
+    keepalive
+    long banner
+    port forwarding
+    rekey deadlock
+    renegotiate
+    reverse port forwarding
+    sanitze packet size
+    sanitze window size
+    security options
+    select
+    select after close
+    send ready
+    server does not respond to MSG UNIMPLEMENTED
+    server rejects arbitrary global request without auth
+    server rejects client MSG USERAUTH SUCCESS
+    server rejects open channel without auth
+    server rejects port forward without auth
+    server transports reject client message types
+    simple
+    special
+    stderr select
+    x11
+    testb security options reset
+
+AlgorithmDisablingTests
+
+    implementation refers to public algo lists
+    preferred lists default to private attribute contents
+    preferred lists filter disabled algorithms
+
+SHA2SignatureKeyExchange
+
+    explicit client hostkey not limited
+    kex with sha2 256
+    kex with sha2 512
+
+ExtInfo
+
+    client uses server sig algs for pubkey auth
+    ext info handshake exposed in client kexinit
+
+StrictKex
+
+    kex algos includes kex strict c
+    mode agreement[True-True]
+    mode agreement[True-False]
+    mode agreement[False-True]
+    mode agreement[False-False]
+    mode advertised by default
+    MessageOrderError non kex messages in initial kex[90]
+    MessageOrderError non kex messages in initial kex[2]
+    MessageOrderError non kex messages in initial kex[4]
+    MessageOrderError non kex messages in initial kex[3]
+    MessageOrderError non kex messages in initial kex[253]
+    SSHException raised on out of order messages when not strict
+    error not raised when kexinit not seq 0 but unstrict
+    MessageOrderError raised when kexinit not seq 0 and strict
+    sequence numbers reset on newkeys when strict
+    sequence numbers not reset on newkeys when not strict
+    sequence number rollover detected
+
+Util
+
+    clamp value
+    generate key bytes
+    host keys
+    imports
+    safe string
+    version available in main module
+
+=================================== FAILURES ===================================
+_____________________ SSHClientTest.test_auth_trickledown ______________________
+
+self = <tests.test_client.SSHClientTest testMethod=test_auth_trickledown>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+______________________ SSHClientTest.test_auto_add_policy ______________________
+
+self = <tests.test_client.SSHClientTest testMethod=test_auto_add_policy>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+______________________ SSHClientTest.test_banner_timeout _______________________
+
+self = <tests.test_client.SSHClientTest testMethod=test_banner_timeout>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+___________ SSHClientTest.test_certs_allowed_as_key_filename_values ____________
+
+self = <tests.test_client.SSHClientTest testMethod=test_certs_allowed_as_key_filename_values>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+____ SSHClientTest.test_certs_implicitly_loaded_alongside_key_filename_keys ____
+
+self = <tests.test_client.SSHClientTest testMethod=test_certs_implicitly_loaded_alongside_key_filename_keys>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+______________________ SSHClientTest.test_channel_timeout ______________________
+
+self = <tests.test_client.SSHClientTest testMethod=test_channel_timeout>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+__________________________ SSHClientTest.test_cleanup __________________________
+
+self = <tests.test_client.SSHClientTest testMethod=test_cleanup>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+__________________________ SSHClientTest.test_client ___________________________
+
+self = <tests.test_client.SSHClientTest testMethod=test_client>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+___________ SSHClientTest.test_client_can_be_used_as_context_manager ___________
+
+self = <tests.test_client.SSHClientTest testMethod=test_client_can_be_used_as_context_manager>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+_______________________ SSHClientTest.test_client_ecdsa ________________________
+
+self = <tests.test_client.SSHClientTest testMethod=test_client_ecdsa>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+______________________ SSHClientTest.test_client_ed25519 _______________________
+
+self = <tests.test_client.SSHClientTest testMethod=test_client_ed25519>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+________________________ SSHClientTest.test_client_rsa _________________________
+
+self = <tests.test_client.SSHClientTest testMethod=test_client_rsa>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+______________ SSHClientTest.test_closes_socket_on_socket_errors _______________
+
+self = <tests.test_client.SSHClientTest testMethod=test_closes_socket_on_socket_errors>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+_____ SSHClientTest.test_default_key_locations_trigger_cert_loads_if_found _____
+
+self = <tests.test_client.SSHClientTest testMethod=test_default_key_locations_trigger_cert_loads_if_found>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+___________ SSHClientTest.test_disabled_algorithms_defaults_to_None ____________
+
+self = <tests.test_client.SSHClientTest testMethod=test_disabled_algorithms_defaults_to_None>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+_______ SSHClientTest.test_disabled_algorithms_passed_directly_if_given ________
+
+self = <tests.test_client.SSHClientTest testMethod=test_disabled_algorithms_passed_directly_if_given>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+__________________ SSHClientTest.test_host_key_negotiation_1 ___________________
+
+self = <tests.test_client.SSHClientTest testMethod=test_host_key_negotiation_1>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+__________________ SSHClientTest.test_host_key_negotiation_2 ___________________
+
+self = <tests.test_client.SSHClientTest testMethod=test_host_key_negotiation_2>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+__________________ SSHClientTest.test_host_key_negotiation_3 ___________________
+
+self = <tests.test_client.SSHClientTest testMethod=test_host_key_negotiation_3>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+__________________ SSHClientTest.test_host_key_negotiation_4 ___________________
+
+self = <tests.test_client.SSHClientTest testMethod=test_host_key_negotiation_4>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+______ SSHClientTest.test_missing_key_policy_accepts_classes_or_instances ______
+
+self = <tests.test_client.SSHClientTest testMethod=test_missing_key_policy_accepts_classes_or_instances>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+____________________ SSHClientTest.test_multiple_key_files _____________________
+
+self = <tests.test_client.SSHClientTest testMethod=test_multiple_key_files>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+________________ SSHClientTest.test_multiple_key_files_failure _________________
+
+self = <tests.test_client.SSHClientTest testMethod=test_multiple_key_files_failure>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+_______________________ SSHClientTest.test_reject_policy _______________________
+
+self = <tests.test_client.SSHClientTest testMethod=test_reject_policy>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+______________________ SSHClientTest.test_save_host_keys _______________________
+
+self = <tests.test_client.SSHClientTest testMethod=test_save_host_keys>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+__________ SSHClientTest.test_transport_factory_defaults_to_Transport __________
+
+self = <tests.test_client.SSHClientTest testMethod=test_transport_factory_defaults_to_Transport>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+____________ SSHClientTest.test_transport_factory_may_be_specified _____________
+
+self = <tests.test_client.SSHClientTest testMethod=test_transport_factory_may_be_specified>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+____________________ SSHClientTest.test_update_environment _____________________
+
+self = <tests.test_client.SSHClientTest testMethod=test_update_environment>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+___ PasswordPassphraseTests.test_passphrase_kwarg_not_used_for_password_auth ___
+
+self = <tests.test_client.PasswordPassphraseTests testMethod=test_passphrase_kwarg_not_used_for_password_auth>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+____ PasswordPassphraseTests.test_passphrase_kwarg_used_for_key_passphrase _____
+
+self = <tests.test_client.PasswordPassphraseTests testMethod=test_passphrase_kwarg_used_for_key_passphrase>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+_ PasswordPassphraseTests.test_password_kwarg_not_used_for_passphrase_when_passphrase_kwarg_given _
+
+self = <tests.test_client.PasswordPassphraseTests testMethod=test_password_kwarg_not_used_for_passphrase_when_passphrase_kwarg_given>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+_ PasswordPassphraseTests.test_password_kwarg_used_for_passphrase_when_no_passphrase_kwarg_given _
+
+self = <tests.test_client.PasswordPassphraseTests testMethod=test_password_kwarg_used_for_passphrase_when_no_passphrase_kwarg_given>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+_____ PasswordPassphraseTests.test_password_kwarg_works_for_password_auth ______
+
+self = <tests.test_client.PasswordPassphraseTests testMethod=test_password_kwarg_works_for_password_auth>
+
+    def setUp(self):
+        self.sockl = socket.socket()
+>       self.sockl.bind(("localhost", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_client.py:115: PermissionError
+______________________ TransportTest.test_port_forwarding ______________________
+
+self = <tests.test_transport.TransportTest testMethod=test_port_forwarding>
+
+    def test_port_forwarding(self):
+        """
+        verify that a client can forward new connections from a locally-
+        forwarded port.
+        """
+        self.setup_test_server()
+        chan = self.tc.open_session()
+        chan.exec_command("yes")
+        self.ts.accept(1.0)
+    
+        # open a port on the "server" that the client will ask to forward to.
+        greeting_server = socket.socket()
+>       greeting_server.bind(("127.0.0.1", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_transport.py:563: PermissionError
+----------------------------- Captured stderr call -----------------------------
+[82627.5007724762]	DEBUG:paramiko.transport:EOF in transport thread
+[82627.66075134277]	DEBUG:paramiko.transport:starting thread (server mode): 0xce56870
+[82628.2787322998]	DEBUG:paramiko.transport:Local version/idstring: SSH-2.0-paramiko_5.0.0
+[82627.95996665955]	DEBUG:paramiko.transport:starting thread (client mode): 0xce55790
+[82628.45873832703]	DEBUG:paramiko.transport:Local version/idstring: SSH-2.0-paramiko_5.0.0
+[82628.71313095093]	DEBUG:paramiko.transport:Remote version/idstring: SSH-2.0-paramiko_5.0.0
+[82628.76296043396]	INFO:paramiko.transport:Connected (version 2.0, client paramiko_5.0.0)
+[82628.51691246033]	DEBUG:paramiko.transport:EOF in transport thread
+[82628.64398956299]	DEBUG:paramiko.transport:Remote version/idstring: SSH-2.0-paramiko_5.0.0
+[82629.05597686768]	INFO:paramiko.transport:Connected (version 2.0, client paramiko_5.0.0)
+[82629.66203689575]	DEBUG:paramiko.transport:=== Key exchange possibilities ===
+[82629.71591949463]	DEBUG:paramiko.transport:kex algos: mlkem768x25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256, ecdh-sha2-nistp384, ecdh-sha2-nistp521, diffie-hellman-group16-sha512, diffie-hellman-group-exchange-sha256, diffie-hellman-group14-sha256, ext-info-c, kex-strict-c-v00@openssh.com
+[82629.74810600281]	DEBUG:paramiko.transport:server key: rsa-sha2-512, rsa-sha2-256, rsa-sha2-512-cert-v01@openssh.com, rsa-sha2-256-cert-v01@openssh.com
+[82629.76908683777]	DEBUG:paramiko.transport:client encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+[82629.79888916016]	DEBUG:paramiko.transport:=== Key exchange possibilities ===
+[82629.97484207153]	DEBUG:paramiko.transport:server encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+[82630.09095191956]	DEBUG:paramiko.transport:kex algos: mlkem768x25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256, ecdh-sha2-nistp384, ecdh-sha2-nistp521, diffie-hellman-group16-sha512, diffie-hellman-group-exchange-sha256, diffie-hellman-group14-sha256, kex-strict-s-v00@openssh.com
+[82630.12099266052]	DEBUG:paramiko.transport:client mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+[82630.27215003967]	DEBUG:paramiko.transport:server key: rsa-sha2-512, rsa-sha2-256
+[82630.55276870728]	DEBUG:paramiko.transport:client encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+[82630.63478469849]	DEBUG:paramiko.transport:server encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+[82630.72276115417]	DEBUG:paramiko.transport:client mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+[82630.79500198364]	DEBUG:paramiko.transport:server mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+[82630.42998313904]	DEBUG:paramiko.transport:server mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+[82630.85508346558]	DEBUG:paramiko.transport:client compress: none
+[82631.35075569153]	DEBUG:paramiko.transport:server compress: none
+[82631.38175010681]	DEBUG:paramiko.transport:client lang: <none>
+[82631.40201568604]	DEBUG:paramiko.transport:server lang: <none>
+[82631.46686553955]	DEBUG:paramiko.transport:kex follows: False
+[82631.49094581604]	DEBUG:paramiko.transport:=== Key exchange agreements ===
+[82631.511926651]	DEBUG:paramiko.transport:Strict kex mode: True
+[82631.17694854736]	DEBUG:paramiko.transport:client compress: none
+[82631.55579566956]	DEBUG:paramiko.transport:Kex: mlkem768x25519-sha256
+[82631.70909881592]	DEBUG:paramiko.transport:server compress: none
+[82631.86478614807]	DEBUG:paramiko.transport:HostKey: rsa-sha2-512
+[82631.97803497314]	DEBUG:paramiko.transport:client lang: <none>
+[82632.0858001709]	DEBUG:paramiko.transport:Cipher: aes128-ctr
+[82632.22885131836]	DEBUG:paramiko.transport:MAC: hmac-sha2-256
+[82632.25793838501]	DEBUG:paramiko.transport:Compression: none
+[82632.27701187134]	DEBUG:paramiko.transport:=== End of kex handshake ===
+[82632.13396072388]	DEBUG:paramiko.transport:server lang: <none>
+[82633.00395011902]	DEBUG:paramiko.transport:kex follows: False
+[82633.09597969055]	DEBUG:paramiko.transport:=== Key exchange agreements ===
+[82633.17799568176]	DEBUG:paramiko.transport:Strict kex mode: True
+[82633.21876525879]	DEBUG:paramiko.transport:Kex: mlkem768x25519-sha256
+[82633.2459449768]	DEBUG:paramiko.transport:HostKey: rsa-sha2-512
+[82633.3179473877]	DEBUG:paramiko.transport:Cipher: aes128-ctr
+[82633.45074653625]	DEBUG:paramiko.transport:MAC: hmac-sha2-256
+[82633.52584838867]	DEBUG:paramiko.transport:Compression: none
+[82633.57973098755]	DEBUG:paramiko.transport:=== End of kex handshake ===
+[82635.90407371521]	DEBUG:paramiko.transport:Resetting outbound seqno after NEWKEYS due to strict mode
+[82635.94675064087]	DEBUG:paramiko.transport:kex engine KexMLKEM768X25519 specified hash_algo <built-in function openssl_sha256>
+[82636.92808151245]	DEBUG:paramiko.transport:Resetting outbound seqno after NEWKEYS due to strict mode
+[82636.98291778564]	DEBUG:paramiko.transport:kex engine KexMLKEM768X25519 specified hash_algo <built-in function openssl_sha256>
+[82637.03203201294]	DEBUG:paramiko.transport:Switch to new keys ...
+[82637.08090782166]	DEBUG:paramiko.transport:Resetting inbound seqno after NEWKEYS due to strict mode
+[82637.13598251343]	DEBUG:paramiko.transport:Got EXT_INFO: {'server-sig-algs': b'ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,rsa-sha2-512,rsa-sha2-256'}
+[82637.50576972961]	DEBUG:paramiko.transport:Switch to new keys ...
+[82637.62784004211]	DEBUG:paramiko.transport:Resetting inbound seqno after NEWKEYS due to strict mode
+[82637.77685165405]	DEBUG:paramiko.transport:Host key verified (ssh-rsa)
+[82638.33403587341]	DEBUG:paramiko.transport:Attempting password auth...
+[82638.9389038086]	DEBUG:paramiko.transport:userauth is OK
+[82639.23001289368]	DEBUG:paramiko.transport:Auth request (type=password) service=ssh-connection, username=slowdive
+[82639.2810344696]	INFO:paramiko.transport:Auth granted (password).
+[82639.46509361267]	INFO:paramiko.transport:Authentication (password) successful!
+[82639.60289955139]	DEBUG:paramiko.transport:[chan 0] Max packet in: 32768 bytes
+[82639.71376419067]	DEBUG:paramiko.transport:[chan 0] Max packet in: 32768 bytes
+[82639.74094390869]	DEBUG:paramiko.transport:[chan 0] Max packet out: 32768 bytes
+[82639.7750377655]	DEBUG:paramiko.transport:Secsh channel 0 (session) opened.
+[82639.90211486816]	DEBUG:paramiko.transport:[chan 0] Max packet out: 32768 bytes
+[82640.0158405304]	DEBUG:paramiko.transport:Secsh channel 0 opened.
+[82640.39993286133]	DEBUG:paramiko.transport:[chan 0] Sesch channel 0 request ok
+------------------------------ Captured log call -------------------------------
+DEBUG    paramiko.transport:transport.py:1791 EOF in transport thread
+DEBUG    paramiko.transport:transport.py:1791 starting thread (server mode): 0xce56870
+DEBUG    paramiko.transport:transport.py:1791 Local version/idstring: SSH-2.0-paramiko_5.0.0
+DEBUG    paramiko.transport:transport.py:1791 starting thread (client mode): 0xce55790
+DEBUG    paramiko.transport:transport.py:1791 Local version/idstring: SSH-2.0-paramiko_5.0.0
+DEBUG    paramiko.transport:transport.py:1791 Remote version/idstring: SSH-2.0-paramiko_5.0.0
+INFO     paramiko.transport:transport.py:1791 Connected (version 2.0, client paramiko_5.0.0)
+DEBUG    paramiko.transport:transport.py:1791 EOF in transport thread
+DEBUG    paramiko.transport:transport.py:1791 Remote version/idstring: SSH-2.0-paramiko_5.0.0
+INFO     paramiko.transport:transport.py:1791 Connected (version 2.0, client paramiko_5.0.0)
+DEBUG    paramiko.transport:transport.py:1791 === Key exchange possibilities ===
+DEBUG    paramiko.transport:transport.py:1791 kex algos: mlkem768x25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256, ecdh-sha2-nistp384, ecdh-sha2-nistp521, diffie-hellman-group16-sha512, diffie-hellman-group-exchange-sha256, diffie-hellman-group14-sha256, ext-info-c, kex-strict-c-v00@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 server key: rsa-sha2-512, rsa-sha2-256, rsa-sha2-512-cert-v01@openssh.com, rsa-sha2-256-cert-v01@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 client encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 === Key exchange possibilities ===
+DEBUG    paramiko.transport:transport.py:1791 server encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 kex algos: mlkem768x25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256, ecdh-sha2-nistp384, ecdh-sha2-nistp521, diffie-hellman-group16-sha512, diffie-hellman-group-exchange-sha256, diffie-hellman-group14-sha256, kex-strict-s-v00@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 client mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+DEBUG    paramiko.transport:transport.py:1791 server key: rsa-sha2-512, rsa-sha2-256
+DEBUG    paramiko.transport:transport.py:1791 client encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 server encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 client mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+DEBUG    paramiko.transport:transport.py:1791 server mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+DEBUG    paramiko.transport:transport.py:1791 server mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+DEBUG    paramiko.transport:transport.py:1791 client compress: none
+DEBUG    paramiko.transport:transport.py:1791 server compress: none
+DEBUG    paramiko.transport:transport.py:1791 client lang: <none>
+DEBUG    paramiko.transport:transport.py:1791 server lang: <none>
+DEBUG    paramiko.transport:transport.py:1791 kex follows: False
+DEBUG    paramiko.transport:transport.py:1791 === Key exchange agreements ===
+DEBUG    paramiko.transport:transport.py:1791 Strict kex mode: True
+DEBUG    paramiko.transport:transport.py:1791 client compress: none
+DEBUG    paramiko.transport:transport.py:1791 Kex: mlkem768x25519-sha256
+DEBUG    paramiko.transport:transport.py:1791 server compress: none
+DEBUG    paramiko.transport:transport.py:1791 HostKey: rsa-sha2-512
+DEBUG    paramiko.transport:transport.py:1791 client lang: <none>
+DEBUG    paramiko.transport:transport.py:1791 Cipher: aes128-ctr
+DEBUG    paramiko.transport:transport.py:1791 MAC: hmac-sha2-256
+DEBUG    paramiko.transport:transport.py:1791 Compression: none
+DEBUG    paramiko.transport:transport.py:1791 === End of kex handshake ===
+DEBUG    paramiko.transport:transport.py:1791 server lang: <none>
+DEBUG    paramiko.transport:transport.py:1791 kex follows: False
+DEBUG    paramiko.transport:transport.py:1791 === Key exchange agreements ===
+DEBUG    paramiko.transport:transport.py:1791 Strict kex mode: True
+DEBUG    paramiko.transport:transport.py:1791 Kex: mlkem768x25519-sha256
+DEBUG    paramiko.transport:transport.py:1791 HostKey: rsa-sha2-512
+DEBUG    paramiko.transport:transport.py:1791 Cipher: aes128-ctr
+DEBUG    paramiko.transport:transport.py:1791 MAC: hmac-sha2-256
+DEBUG    paramiko.transport:transport.py:1791 Compression: none
+DEBUG    paramiko.transport:transport.py:1791 === End of kex handshake ===
+DEBUG    paramiko.transport:transport.py:1791 Resetting outbound seqno after NEWKEYS due to strict mode
+DEBUG    paramiko.transport:transport.py:1791 kex engine KexMLKEM768X25519 specified hash_algo <built-in function openssl_sha256>
+DEBUG    paramiko.transport:transport.py:1791 Resetting outbound seqno after NEWKEYS due to strict mode
+DEBUG    paramiko.transport:transport.py:1791 kex engine KexMLKEM768X25519 specified hash_algo <built-in function openssl_sha256>
+DEBUG    paramiko.transport:transport.py:1791 Switch to new keys ...
+DEBUG    paramiko.transport:transport.py:1791 Resetting inbound seqno after NEWKEYS due to strict mode
+DEBUG    paramiko.transport:transport.py:1791 Got EXT_INFO: {'server-sig-algs': b'ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,rsa-sha2-512,rsa-sha2-256'}
+DEBUG    paramiko.transport:transport.py:1791 Switch to new keys ...
+DEBUG    paramiko.transport:transport.py:1791 Resetting inbound seqno after NEWKEYS due to strict mode
+DEBUG    paramiko.transport:transport.py:1791 Host key verified (ssh-rsa)
+DEBUG    paramiko.transport:transport.py:1791 Attempting password auth...
+DEBUG    paramiko.transport:transport.py:1791 userauth is OK
+DEBUG    paramiko.transport:transport.py:1791 Auth request (type=password) service=ssh-connection, username=slowdive
+INFO     paramiko.transport:transport.py:1791 Auth granted (password).
+INFO     paramiko.transport:transport.py:1791 Authentication (password) successful!
+DEBUG    paramiko.transport:channel.py:1210 [chan 0] Max packet in: 32768 bytes
+DEBUG    paramiko.transport:channel.py:1210 [chan 0] Max packet in: 32768 bytes
+DEBUG    paramiko.transport:channel.py:1210 [chan 0] Max packet out: 32768 bytes
+DEBUG    paramiko.transport:transport.py:1791 Secsh channel 0 (session) opened.
+DEBUG    paramiko.transport:channel.py:1210 [chan 0] Max packet out: 32768 bytes
+DEBUG    paramiko.transport:transport.py:1791 Secsh channel 0 opened.
+DEBUG    paramiko.transport:channel.py:1210 [chan 0] Sesch channel 0 request ok
+__________________ TransportTest.test_reverse_port_forwarding __________________
+
+self = <tests.test_transport.TransportTest testMethod=test_reverse_port_forwarding>
+
+    def test_reverse_port_forwarding(self):
+        """
+        verify that a client can ask the server to open a reverse port for
+        forwarding.
+        """
+        self.setup_test_server()
+        chan = self.tc.open_session()
+        chan.exec_command("yes")
+        self.ts.accept(1.0)
+    
+        requested = []
+    
+        def handler(c, origin_addr_port, server_addr_port):
+            requested.append(origin_addr_port)
+            requested.append(server_addr_port)
+            self.tc._queue_incoming_channel(c)
+    
+>       port = self.tc.request_port_forward("127.0.0.1", 0, handler)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_transport.py:529: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <paramiko.Transport at 0xc05b440 (unconnected)>, address = '127.0.0.1'
+port = 0
+handler = <function TransportTest.test_reverse_port_forwarding.<locals>.handler at 0x10ce0d3a0>
+
+    def request_port_forward(self, address, port, handler=None):
+        """
+        Ask the server to forward TCP connections from a listening port on
+        the server, across this SSH session.
+    
+        If a handler is given, that handler is called from a different thread
+        whenever a forwarded connection arrives.  The handler parameters are::
+    
+            handler(
+                channel,
+                (origin_addr, origin_port),
+                (server_addr, server_port),
+            )
+    
+        where ``server_addr`` and ``server_port`` are the address and port that
+        the server was listening on.
+    
+        If no handler is set, the default behavior is to send new incoming
+        forwarded connections into the accept queue, to be picked up via
+        `accept`.
+    
+        :param str address: the address to bind when forwarding
+        :param int port:
+            the port to forward, or 0 to ask the server to allocate any port
+        :param callable handler:
+            optional handler for incoming forwarded connections, of the form
+            ``func(Channel, (str, int), (str, int))``.
+    
+        :return: the port number (`int`) allocated by the server
+    
+        :raises:
+            `.SSHException` -- if the server refused the TCP forward request
+        """
+        if not self.active:
+            raise SSHException("SSH session not active")
+        port = int(port)
+        response = self.global_request(
+            "tcpip-forward", (address, port), wait=True
+        )
+        if response is None:
+>           raise SSHException("TCP forwarding request denied")
+E           paramiko.ssh_exception.SSHException: TCP forwarding request denied
+
+paramiko/transport.py:1110: SSHException
+----------------------------- Captured stderr call -----------------------------
+[83244.95697021484]	DEBUG:paramiko.transport:EOF in transport thread
+[83245.1868057251]	DEBUG:paramiko.transport:EOF in transport thread
+[83245.91588973999]	DEBUG:paramiko.transport:starting thread (server mode): 0xc05a090
+[83245.9831237793]	DEBUG:paramiko.transport:Local version/idstring: SSH-2.0-paramiko_5.0.0
+[83246.30689620972]	DEBUG:paramiko.transport:starting thread (client mode): 0xc05b440
+[83246.47188186646]	DEBUG:paramiko.transport:Local version/idstring: SSH-2.0-paramiko_5.0.0
+[83246.5307712555]	DEBUG:paramiko.transport:Remote version/idstring: SSH-2.0-paramiko_5.0.0
+[83246.89388275146]	INFO:paramiko.transport:Connected (version 2.0, client paramiko_5.0.0)
+[83247.14183807373]	DEBUG:paramiko.transport:Remote version/idstring: SSH-2.0-paramiko_5.0.0
+[83247.31087684631]	INFO:paramiko.transport:Connected (version 2.0, client paramiko_5.0.0)
+[83247.7650642395]	DEBUG:paramiko.transport:=== Key exchange possibilities ===
+[83247.80893325806]	DEBUG:paramiko.transport:kex algos: mlkem768x25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256, ecdh-sha2-nistp384, ecdh-sha2-nistp521, diffie-hellman-group16-sha512, diffie-hellman-group-exchange-sha256, diffie-hellman-group14-sha256, ext-info-c, kex-strict-c-v00@openssh.com
+[83248.19993972778]	DEBUG:paramiko.transport:server key: rsa-sha2-512, rsa-sha2-256, rsa-sha2-512-cert-v01@openssh.com, rsa-sha2-256-cert-v01@openssh.com
+[83248.27599525452]	DEBUG:paramiko.transport:client encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+[83248.07095527649]	DEBUG:paramiko.transport:=== Key exchange possibilities ===
+[83248.31795692444]	DEBUG:paramiko.transport:server encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+[83248.450756073]	DEBUG:paramiko.transport:client mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+[83248.4200000763]	DEBUG:paramiko.transport:kex algos: mlkem768x25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256, ecdh-sha2-nistp384, ecdh-sha2-nistp521, diffie-hellman-group16-sha512, diffie-hellman-group-exchange-sha256, diffie-hellman-group14-sha256, kex-strict-s-v00@openssh.com
+[83248.48484992981]	DEBUG:paramiko.transport:server mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+[83248.63505363464]	DEBUG:paramiko.transport:client compress: none
+[83248.71897697449]	DEBUG:paramiko.transport:server compress: none
+[83248.51107597351]	DEBUG:paramiko.transport:server key: rsa-sha2-512, rsa-sha2-256
+[83248.74877929688]	DEBUG:paramiko.transport:client lang: <none>
+[83248.92711639404]	DEBUG:paramiko.transport:client encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+[83249.03297424316]	DEBUG:paramiko.transport:server encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+[83249.05204772949]	DEBUG:paramiko.transport:client mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+[83249.11379814148]	DEBUG:paramiko.transport:server mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+[83249.13191795349]	DEBUG:paramiko.transport:client compress: none
+[83249.14693832397]	DEBUG:paramiko.transport:server compress: none
+[83248.96502494812]	DEBUG:paramiko.transport:server lang: <none>
+[83249.19295310974]	DEBUG:paramiko.transport:kex follows: False
+[83249.21083450317]	DEBUG:paramiko.transport:=== Key exchange agreements ===
+[83249.2299079895]	DEBUG:paramiko.transport:Strict kex mode: True
+[83249.28283691406]	DEBUG:paramiko.transport:Kex: mlkem768x25519-sha256
+[83249.16315078735]	DEBUG:paramiko.transport:client lang: <none>
+[83249.31001663208]	DEBUG:paramiko.transport:HostKey: rsa-sha2-512
+[83249.4649887085]	DEBUG:paramiko.transport:Cipher: aes128-ctr
+[83249.49383735657]	DEBUG:paramiko.transport:MAC: hmac-sha2-256
+[83249.51577186584]	DEBUG:paramiko.transport:Compression: none
+[83249.53389167786]	DEBUG:paramiko.transport:=== End of kex handshake ===
+[83249.40609931946]	DEBUG:paramiko.transport:server lang: <none>
+[83249.86290931702]	DEBUG:paramiko.transport:kex follows: False
+[83249.94277954102]	DEBUG:paramiko.transport:=== Key exchange agreements ===
+[83250.00095367432]	DEBUG:paramiko.transport:Strict kex mode: True
+[83250.06484985352]	DEBUG:paramiko.transport:Kex: mlkem768x25519-sha256
+[83250.21982192993]	DEBUG:paramiko.transport:HostKey: rsa-sha2-512
+[83250.33688545227]	DEBUG:paramiko.transport:Cipher: aes128-ctr
+[83250.36811828613]	DEBUG:paramiko.transport:MAC: hmac-sha2-256
+[83250.38981437683]	DEBUG:paramiko.transport:Compression: none
+[83250.40698051453]	DEBUG:paramiko.transport:=== End of kex handshake ===
+[83252.3307800293]	DEBUG:paramiko.transport:Resetting outbound seqno after NEWKEYS due to strict mode
+[83252.37894058228]	DEBUG:paramiko.transport:kex engine KexMLKEM768X25519 specified hash_algo <built-in function openssl_sha256>
+[83253.56388092041]	DEBUG:paramiko.transport:Resetting outbound seqno after NEWKEYS due to strict mode
+[83253.60798835754]	DEBUG:paramiko.transport:kex engine KexMLKEM768X25519 specified hash_algo <built-in function openssl_sha256>
+[83253.662109375]	DEBUG:paramiko.transport:Switch to new keys ...
+[83253.70287895203]	DEBUG:paramiko.transport:Resetting inbound seqno after NEWKEYS due to strict mode
+[83253.75080108643]	DEBUG:paramiko.transport:Got EXT_INFO: {'server-sig-algs': b'ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,rsa-sha2-512,rsa-sha2-256'}
+[83253.92293930054]	DEBUG:paramiko.transport:Host key verified (ssh-rsa)
+[83253.97801399231]	DEBUG:paramiko.transport:Switch to new keys ...
+[83254.03189659119]	DEBUG:paramiko.transport:Attempting password auth...
+[83254.20808792114]	DEBUG:paramiko.transport:Resetting inbound seqno after NEWKEYS due to strict mode
+[83254.80103492737]	DEBUG:paramiko.transport:userauth is OK
+[83254.89687919617]	DEBUG:paramiko.transport:Auth request (type=password) service=ssh-connection, username=slowdive
+[83254.94194030762]	INFO:paramiko.transport:Auth granted (password).
+[83255.0117969513]	INFO:paramiko.transport:Authentication (password) successful!
+[83255.14888763428]	DEBUG:paramiko.transport:[chan 0] Max packet in: 32768 bytes
+[83255.22685050964]	DEBUG:paramiko.transport:[chan 0] Max packet in: 32768 bytes
+[83255.25689125061]	DEBUG:paramiko.transport:[chan 0] Max packet out: 32768 bytes
+[83255.37705421448]	DEBUG:paramiko.transport:Secsh channel 0 (session) opened.
+[83255.49292564392]	DEBUG:paramiko.transport:[chan 0] Max packet out: 32768 bytes
+[83255.51891326904]	DEBUG:paramiko.transport:Secsh channel 0 opened.
+[83255.72204589844]	DEBUG:paramiko.transport:[chan 0] Sesch channel 0 request ok
+[83255.78188896179]	DEBUG:paramiko.transport:Sending global request "tcpip-forward"
+[83256.03485107422]	DEBUG:paramiko.transport:Received global request "tcpip-forward"
+[83256.12092018127]	ERROR:paramiko.transport:Socket exception: Operation not permitted (1)
+[83359.79771614075]	DEBUG:paramiko.transport:EOF in transport thread
+------------------------------ Captured log call -------------------------------
+DEBUG    paramiko.transport:transport.py:1791 EOF in transport thread
+DEBUG    paramiko.transport:transport.py:1791 EOF in transport thread
+DEBUG    paramiko.transport:transport.py:1791 starting thread (server mode): 0xc05a090
+DEBUG    paramiko.transport:transport.py:1791 Local version/idstring: SSH-2.0-paramiko_5.0.0
+DEBUG    paramiko.transport:transport.py:1791 starting thread (client mode): 0xc05b440
+DEBUG    paramiko.transport:transport.py:1791 Local version/idstring: SSH-2.0-paramiko_5.0.0
+DEBUG    paramiko.transport:transport.py:1791 Remote version/idstring: SSH-2.0-paramiko_5.0.0
+INFO     paramiko.transport:transport.py:1791 Connected (version 2.0, client paramiko_5.0.0)
+DEBUG    paramiko.transport:transport.py:1791 Remote version/idstring: SSH-2.0-paramiko_5.0.0
+INFO     paramiko.transport:transport.py:1791 Connected (version 2.0, client paramiko_5.0.0)
+DEBUG    paramiko.transport:transport.py:1791 === Key exchange possibilities ===
+DEBUG    paramiko.transport:transport.py:1791 kex algos: mlkem768x25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256, ecdh-sha2-nistp384, ecdh-sha2-nistp521, diffie-hellman-group16-sha512, diffie-hellman-group-exchange-sha256, diffie-hellman-group14-sha256, ext-info-c, kex-strict-c-v00@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 server key: rsa-sha2-512, rsa-sha2-256, rsa-sha2-512-cert-v01@openssh.com, rsa-sha2-256-cert-v01@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 client encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 === Key exchange possibilities ===
+DEBUG    paramiko.transport:transport.py:1791 server encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 client mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+DEBUG    paramiko.transport:transport.py:1791 kex algos: mlkem768x25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256, ecdh-sha2-nistp384, ecdh-sha2-nistp521, diffie-hellman-group16-sha512, diffie-hellman-group-exchange-sha256, diffie-hellman-group14-sha256, kex-strict-s-v00@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 server mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+DEBUG    paramiko.transport:transport.py:1791 client compress: none
+DEBUG    paramiko.transport:transport.py:1791 server compress: none
+DEBUG    paramiko.transport:transport.py:1791 server key: rsa-sha2-512, rsa-sha2-256
+DEBUG    paramiko.transport:transport.py:1791 client lang: <none>
+DEBUG    paramiko.transport:transport.py:1791 client encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 server encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 client mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+DEBUG    paramiko.transport:transport.py:1791 server mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+DEBUG    paramiko.transport:transport.py:1791 client compress: none
+DEBUG    paramiko.transport:transport.py:1791 server compress: none
+DEBUG    paramiko.transport:transport.py:1791 server lang: <none>
+DEBUG    paramiko.transport:transport.py:1791 kex follows: False
+DEBUG    paramiko.transport:transport.py:1791 === Key exchange agreements ===
+DEBUG    paramiko.transport:transport.py:1791 Strict kex mode: True
+DEBUG    paramiko.transport:transport.py:1791 Kex: mlkem768x25519-sha256
+DEBUG    paramiko.transport:transport.py:1791 client lang: <none>
+DEBUG    paramiko.transport:transport.py:1791 HostKey: rsa-sha2-512
+DEBUG    paramiko.transport:transport.py:1791 Cipher: aes128-ctr
+DEBUG    paramiko.transport:transport.py:1791 MAC: hmac-sha2-256
+DEBUG    paramiko.transport:transport.py:1791 Compression: none
+DEBUG    paramiko.transport:transport.py:1791 === End of kex handshake ===
+DEBUG    paramiko.transport:transport.py:1791 server lang: <none>
+DEBUG    paramiko.transport:transport.py:1791 kex follows: False
+DEBUG    paramiko.transport:transport.py:1791 === Key exchange agreements ===
+DEBUG    paramiko.transport:transport.py:1791 Strict kex mode: True
+DEBUG    paramiko.transport:transport.py:1791 Kex: mlkem768x25519-sha256
+DEBUG    paramiko.transport:transport.py:1791 HostKey: rsa-sha2-512
+DEBUG    paramiko.transport:transport.py:1791 Cipher: aes128-ctr
+DEBUG    paramiko.transport:transport.py:1791 MAC: hmac-sha2-256
+DEBUG    paramiko.transport:transport.py:1791 Compression: none
+DEBUG    paramiko.transport:transport.py:1791 === End of kex handshake ===
+DEBUG    paramiko.transport:transport.py:1791 Resetting outbound seqno after NEWKEYS due to strict mode
+DEBUG    paramiko.transport:transport.py:1791 kex engine KexMLKEM768X25519 specified hash_algo <built-in function openssl_sha256>
+DEBUG    paramiko.transport:transport.py:1791 Resetting outbound seqno after NEWKEYS due to strict mode
+DEBUG    paramiko.transport:transport.py:1791 kex engine KexMLKEM768X25519 specified hash_algo <built-in function openssl_sha256>
+DEBUG    paramiko.transport:transport.py:1791 Switch to new keys ...
+DEBUG    paramiko.transport:transport.py:1791 Resetting inbound seqno after NEWKEYS due to strict mode
+DEBUG    paramiko.transport:transport.py:1791 Got EXT_INFO: {'server-sig-algs': b'ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,rsa-sha2-512,rsa-sha2-256'}
+DEBUG    paramiko.transport:transport.py:1791 Host key verified (ssh-rsa)
+DEBUG    paramiko.transport:transport.py:1791 Switch to new keys ...
+DEBUG    paramiko.transport:transport.py:1791 Attempting password auth...
+DEBUG    paramiko.transport:transport.py:1791 Resetting inbound seqno after NEWKEYS due to strict mode
+DEBUG    paramiko.transport:transport.py:1791 userauth is OK
+DEBUG    paramiko.transport:transport.py:1791 Auth request (type=password) service=ssh-connection, username=slowdive
+INFO     paramiko.transport:transport.py:1791 Auth granted (password).
+INFO     paramiko.transport:transport.py:1791 Authentication (password) successful!
+DEBUG    paramiko.transport:channel.py:1210 [chan 0] Max packet in: 32768 bytes
+DEBUG    paramiko.transport:channel.py:1210 [chan 0] Max packet in: 32768 bytes
+DEBUG    paramiko.transport:channel.py:1210 [chan 0] Max packet out: 32768 bytes
+DEBUG    paramiko.transport:transport.py:1791 Secsh channel 0 (session) opened.
+DEBUG    paramiko.transport:channel.py:1210 [chan 0] Max packet out: 32768 bytes
+DEBUG    paramiko.transport:transport.py:1791 Secsh channel 0 opened.
+DEBUG    paramiko.transport:channel.py:1210 [chan 0] Sesch channel 0 request ok
+DEBUG    paramiko.transport:transport.py:1791 Sending global request "tcpip-forward"
+DEBUG    paramiko.transport:transport.py:1791 Received global request "tcpip-forward"
+ERROR    paramiko.transport:transport.py:1791 Socket exception: Operation not permitted (1)
+DEBUG    paramiko.transport:transport.py:1791 EOF in transport thread
+_____________ ServiceRequestingTransportTest.test_port_forwarding ______________
+
+self = <tests.test_transport.ServiceRequestingTransportTest testMethod=test_port_forwarding>
+
+    def test_port_forwarding(self):
+        """
+        verify that a client can forward new connections from a locally-
+        forwarded port.
+        """
+        self.setup_test_server()
+        chan = self.tc.open_session()
+        chan.exec_command("yes")
+        self.ts.accept(1.0)
+    
+        # open a port on the "server" that the client will ask to forward to.
+        greeting_server = socket.socket()
+>       greeting_server.bind(("127.0.0.1", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_transport.py:563: PermissionError
+----------------------------- Captured stderr call -----------------------------
+[92754.47297096252]	DEBUG:paramiko.transport:starting thread (server mode): 0xcdc9400
+[92754.68611717224]	DEBUG:paramiko.transport:Local version/idstring: SSH-2.0-paramiko_5.0.0
+[92755.96189498901]	DEBUG:paramiko.transport:starting thread (client mode): 0xce13830
+[92756.8588256836]	DEBUG:paramiko.transport:Local version/idstring: SSH-2.0-paramiko_5.0.0
+[92756.9899559021]	DEBUG:paramiko.transport:Remote version/idstring: SSH-2.0-paramiko_5.0.0
+[92757.18402862549]	INFO:paramiko.transport:Connected (version 2.0, client paramiko_5.0.0)
+[92757.98416137695]	DEBUG:paramiko.transport:Remote version/idstring: SSH-2.0-paramiko_5.0.0
+[92758.02612304688]	INFO:paramiko.transport:Connected (version 2.0, client paramiko_5.0.0)
+[92758.54992866516]	DEBUG:paramiko.transport:=== Key exchange possibilities ===
+[92758.68082046509]	DEBUG:paramiko.transport:=== Key exchange possibilities ===
+[92758.82983207703]	DEBUG:paramiko.transport:kex algos: mlkem768x25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256, ecdh-sha2-nistp384, ecdh-sha2-nistp521, diffie-hellman-group16-sha512, diffie-hellman-group-exchange-sha256, diffie-hellman-group14-sha256, ext-info-c, kex-strict-c-v00@openssh.com
+[92761.04307174683]	DEBUG:paramiko.transport:kex algos: mlkem768x25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256, ecdh-sha2-nistp384, ecdh-sha2-nistp521, diffie-hellman-group16-sha512, diffie-hellman-group-exchange-sha256, diffie-hellman-group14-sha256, kex-strict-s-v00@openssh.com
+[92762.12096214294]	DEBUG:paramiko.transport:server key: rsa-sha2-512, rsa-sha2-256
+[92762.24398612976]	DEBUG:paramiko.transport:client encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+[92762.30788230896]	DEBUG:paramiko.transport:server encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+[92762.36391067505]	DEBUG:paramiko.transport:client mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+[92762.42280006409]	DEBUG:paramiko.transport:server mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+[92762.48002052307]	DEBUG:paramiko.transport:client compress: none
+[92762.52889633179]	DEBUG:paramiko.transport:server compress: none
+[92762.63308525085]	DEBUG:paramiko.transport:client lang: <none>
+[92762.65978813171]	DEBUG:paramiko.transport:server lang: <none>
+[92762.69197463989]	DEBUG:paramiko.transport:kex follows: False
+[92762.84694671631]	DEBUG:paramiko.transport:=== Key exchange agreements ===
+[92762.943983078]	DEBUG:paramiko.transport:Strict kex mode: True
+[92762.98880577087]	DEBUG:paramiko.transport:Kex: mlkem768x25519-sha256
+[92763.01980018616]	DEBUG:paramiko.transport:HostKey: rsa-sha2-512
+[92763.05174827576]	DEBUG:paramiko.transport:Cipher: aes128-ctr
+[92763.07702064514]	DEBUG:paramiko.transport:MAC: hmac-sha2-256
+[92763.09990882874]	DEBUG:paramiko.transport:Compression: none
+[92763.11779022217]	DEBUG:paramiko.transport:=== End of kex handshake ===
+[92763.89384269714]	DEBUG:paramiko.transport:server key: rsa-sha2-512, rsa-sha2-256, rsa-sha2-512-cert-v01@openssh.com, rsa-sha2-256-cert-v01@openssh.com
+[92764.04786109924]	DEBUG:paramiko.transport:client encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+[92764.08505439758]	DEBUG:paramiko.transport:server encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+[92764.99009132385]	DEBUG:paramiko.transport:client mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+[92765.04302024841]	DEBUG:paramiko.transport:server mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+[92765.09976387024]	DEBUG:paramiko.transport:client compress: none
+[92765.29908180237]	DEBUG:paramiko.transport:server compress: none
+[92765.32196998596]	DEBUG:paramiko.transport:client lang: <none>
+[92765.33889770508]	DEBUG:paramiko.transport:server lang: <none>
+[92765.39874076843]	DEBUG:paramiko.transport:kex follows: False
+[92765.4218673706]	DEBUG:paramiko.transport:=== Key exchange agreements ===
+[92765.4459476471]	DEBUG:paramiko.transport:Strict kex mode: True
+[92765.4721736908]	DEBUG:paramiko.transport:Kex: mlkem768x25519-sha256
+[92765.52987098694]	DEBUG:paramiko.transport:HostKey: rsa-sha2-512
+[92765.58709144592]	DEBUG:paramiko.transport:Cipher: aes128-ctr
+[92765.60997962952]	DEBUG:paramiko.transport:MAC: hmac-sha2-256
+[92765.63096046448]	DEBUG:paramiko.transport:Compression: none
+[92765.64693450928]	DEBUG:paramiko.transport:=== End of kex handshake ===
+[92768.9061164856]	DEBUG:paramiko.transport:Resetting outbound seqno after NEWKEYS due to strict mode
+[92769.73915100098]	DEBUG:paramiko.transport:kex engine KexMLKEM768X25519 specified hash_algo <built-in function openssl_sha256>
+[92770.24006843567]	DEBUG:paramiko.transport:Switch to new keys ...
+[92769.64378356934]	DEBUG:paramiko.transport:Resetting outbound seqno after NEWKEYS due to strict mode
+[92771.30389213562]	DEBUG:paramiko.transport:kex engine KexMLKEM768X25519 specified hash_algo <built-in function openssl_sha256>
+[92771.40688896179]	DEBUG:paramiko.transport:Switch to new keys ...
+[92771.44193649292]	DEBUG:paramiko.transport:Resetting inbound seqno after NEWKEYS due to strict mode
+[92772.08495140076]	DEBUG:paramiko.transport:Got EXT_INFO: {'server-sig-algs': b'ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,rsa-sha2-512,rsa-sha2-256'}
+[92770.51997184753]	DEBUG:paramiko.transport:Resetting inbound seqno after NEWKEYS due to strict mode
+[92776.14283561707]	DEBUG:paramiko.transport:Host key verified (ssh-rsa)
+[92776.19481086731]	DEBUG:paramiko.transport:Attempting password auth...
+[92776.2188911438]	DEBUG:paramiko.transport:Sending MSG_SERVICE_REQUEST: ssh-userauth
+[92777.52590179443]	DEBUG:paramiko.transport:MSG_SERVICE_ACCEPT received; auth may begin
+[92815.44303894043]	DEBUG:paramiko.transport:EOF in transport thread
+[92817.00801849365]	DEBUG:paramiko.transport:EOF in transport thread
+[92881.01100921631]	DEBUG:paramiko.transport:Auth request (type=password) service=ssh-connection, username=slowdive
+[92881.10399246216]	INFO:paramiko.transport:Auth granted (password).
+[92881.29377365112]	INFO:paramiko.transport:Authentication (password) successful!
+[92881.49213790894]	DEBUG:paramiko.transport:[chan 0] Max packet in: 32768 bytes
+[92882.14683532715]	DEBUG:paramiko.transport:[chan 0] Max packet in: 32768 bytes
+[92882.29990005493]	DEBUG:paramiko.transport:[chan 0] Max packet out: 32768 bytes
+[92882.44891166687]	DEBUG:paramiko.transport:Secsh channel 0 (session) opened.
+[92883.03589820862]	DEBUG:paramiko.transport:[chan 0] Max packet out: 32768 bytes
+[92883.14294815063]	DEBUG:paramiko.transport:Secsh channel 0 opened.
+[92886.45696640015]	DEBUG:paramiko.transport:[chan 0] Sesch channel 0 request ok
+------------------------------ Captured log call -------------------------------
+DEBUG    paramiko.transport:transport.py:1791 starting thread (server mode): 0xcdc9400
+DEBUG    paramiko.transport:transport.py:1791 Local version/idstring: SSH-2.0-paramiko_5.0.0
+DEBUG    paramiko.transport:transport.py:1791 starting thread (client mode): 0xce13830
+DEBUG    paramiko.transport:transport.py:1791 Local version/idstring: SSH-2.0-paramiko_5.0.0
+DEBUG    paramiko.transport:transport.py:1791 Remote version/idstring: SSH-2.0-paramiko_5.0.0
+INFO     paramiko.transport:transport.py:1791 Connected (version 2.0, client paramiko_5.0.0)
+DEBUG    paramiko.transport:transport.py:1791 Remote version/idstring: SSH-2.0-paramiko_5.0.0
+INFO     paramiko.transport:transport.py:1791 Connected (version 2.0, client paramiko_5.0.0)
+DEBUG    paramiko.transport:transport.py:1791 === Key exchange possibilities ===
+DEBUG    paramiko.transport:transport.py:1791 === Key exchange possibilities ===
+DEBUG    paramiko.transport:transport.py:1791 kex algos: mlkem768x25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256, ecdh-sha2-nistp384, ecdh-sha2-nistp521, diffie-hellman-group16-sha512, diffie-hellman-group-exchange-sha256, diffie-hellman-group14-sha256, kex-strict-s-v00@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 server key: rsa-sha2-512, rsa-sha2-256
+DEBUG    paramiko.transport:transport.py:1791 client encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 server encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 client mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+DEBUG    paramiko.transport:transport.py:1791 server mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+DEBUG    paramiko.transport:transport.py:1791 client compress: none
+DEBUG    paramiko.transport:transport.py:1791 server compress: none
+DEBUG    paramiko.transport:transport.py:1791 client lang: <none>
+DEBUG    paramiko.transport:transport.py:1791 server lang: <none>
+DEBUG    paramiko.transport:transport.py:1791 kex follows: False
+DEBUG    paramiko.transport:transport.py:1791 === Key exchange agreements ===
+DEBUG    paramiko.transport:transport.py:1791 Strict kex mode: True
+DEBUG    paramiko.transport:transport.py:1791 Kex: mlkem768x25519-sha256
+DEBUG    paramiko.transport:transport.py:1791 HostKey: rsa-sha2-512
+DEBUG    paramiko.transport:transport.py:1791 Cipher: aes128-ctr
+DEBUG    paramiko.transport:transport.py:1791 MAC: hmac-sha2-256
+DEBUG    paramiko.transport:transport.py:1791 Compression: none
+DEBUG    paramiko.transport:transport.py:1791 === End of kex handshake ===
+DEBUG    paramiko.transport:transport.py:1791 kex algos: mlkem768x25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256, ecdh-sha2-nistp384, ecdh-sha2-nistp521, diffie-hellman-group16-sha512, diffie-hellman-group-exchange-sha256, diffie-hellman-group14-sha256, ext-info-c, kex-strict-c-v00@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 server key: rsa-sha2-512, rsa-sha2-256, rsa-sha2-512-cert-v01@openssh.com, rsa-sha2-256-cert-v01@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 client encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 server encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 client mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+DEBUG    paramiko.transport:transport.py:1791 server mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+DEBUG    paramiko.transport:transport.py:1791 client compress: none
+DEBUG    paramiko.transport:transport.py:1791 server compress: none
+DEBUG    paramiko.transport:transport.py:1791 client lang: <none>
+DEBUG    paramiko.transport:transport.py:1791 server lang: <none>
+DEBUG    paramiko.transport:transport.py:1791 kex follows: False
+DEBUG    paramiko.transport:transport.py:1791 === Key exchange agreements ===
+DEBUG    paramiko.transport:transport.py:1791 Strict kex mode: True
+DEBUG    paramiko.transport:transport.py:1791 Kex: mlkem768x25519-sha256
+DEBUG    paramiko.transport:transport.py:1791 HostKey: rsa-sha2-512
+DEBUG    paramiko.transport:transport.py:1791 Cipher: aes128-ctr
+DEBUG    paramiko.transport:transport.py:1791 MAC: hmac-sha2-256
+DEBUG    paramiko.transport:transport.py:1791 Compression: none
+DEBUG    paramiko.transport:transport.py:1791 === End of kex handshake ===
+DEBUG    paramiko.transport:transport.py:1791 Resetting outbound seqno after NEWKEYS due to strict mode
+DEBUG    paramiko.transport:transport.py:1791 kex engine KexMLKEM768X25519 specified hash_algo <built-in function openssl_sha256>
+DEBUG    paramiko.transport:transport.py:1791 Switch to new keys ...
+DEBUG    paramiko.transport:transport.py:1791 Resetting outbound seqno after NEWKEYS due to strict mode
+DEBUG    paramiko.transport:transport.py:1791 kex engine KexMLKEM768X25519 specified hash_algo <built-in function openssl_sha256>
+DEBUG    paramiko.transport:transport.py:1791 Switch to new keys ...
+DEBUG    paramiko.transport:transport.py:1791 Resetting inbound seqno after NEWKEYS due to strict mode
+DEBUG    paramiko.transport:transport.py:1791 Got EXT_INFO: {'server-sig-algs': b'ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,rsa-sha2-512,rsa-sha2-256'}
+DEBUG    paramiko.transport:transport.py:1791 Resetting inbound seqno after NEWKEYS due to strict mode
+DEBUG    paramiko.transport:transport.py:1791 Host key verified (ssh-rsa)
+DEBUG    paramiko.transport:transport.py:1791 Attempting password auth...
+DEBUG    paramiko.transport:transport.py:1791 Sending MSG_SERVICE_REQUEST: ssh-userauth
+DEBUG    paramiko.transport:transport.py:1791 MSG_SERVICE_ACCEPT received; auth may begin
+DEBUG    paramiko.transport:transport.py:1791 EOF in transport thread
+DEBUG    paramiko.transport:transport.py:1791 EOF in transport thread
+DEBUG    paramiko.transport:transport.py:1791 Auth request (type=password) service=ssh-connection, username=slowdive
+INFO     paramiko.transport:transport.py:1791 Auth granted (password).
+INFO     paramiko.transport:transport.py:1791 Authentication (password) successful!
+DEBUG    paramiko.transport:channel.py:1210 [chan 0] Max packet in: 32768 bytes
+DEBUG    paramiko.transport:channel.py:1210 [chan 0] Max packet in: 32768 bytes
+DEBUG    paramiko.transport:channel.py:1210 [chan 0] Max packet out: 32768 bytes
+DEBUG    paramiko.transport:transport.py:1791 Secsh channel 0 (session) opened.
+DEBUG    paramiko.transport:channel.py:1210 [chan 0] Max packet out: 32768 bytes
+DEBUG    paramiko.transport:transport.py:1791 Secsh channel 0 opened.
+DEBUG    paramiko.transport:channel.py:1210 [chan 0] Sesch channel 0 request ok
+_________ ServiceRequestingTransportTest.test_reverse_port_forwarding __________
+
+self = <tests.test_transport.ServiceRequestingTransportTest testMethod=test_reverse_port_forwarding>
+
+    def test_reverse_port_forwarding(self):
+        """
+        verify that a client can ask the server to open a reverse port for
+        forwarding.
+        """
+        self.setup_test_server()
+        chan = self.tc.open_session()
+        chan.exec_command("yes")
+        self.ts.accept(1.0)
+    
+        requested = []
+    
+        def handler(c, origin_addr_port, server_addr_port):
+            requested.append(origin_addr_port)
+            requested.append(server_addr_port)
+            self.tc._queue_incoming_channel(c)
+    
+>       port = self.tc.request_port_forward("127.0.0.1", 0, handler)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_transport.py:529: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <paramiko.Transport at 0xcdc9cd0 (unconnected)>, address = '127.0.0.1'
+port = 0
+handler = <function TransportTest.test_reverse_port_forwarding.<locals>.handler at 0x10cd57560>
+
+    def request_port_forward(self, address, port, handler=None):
+        """
+        Ask the server to forward TCP connections from a listening port on
+        the server, across this SSH session.
+    
+        If a handler is given, that handler is called from a different thread
+        whenever a forwarded connection arrives.  The handler parameters are::
+    
+            handler(
+                channel,
+                (origin_addr, origin_port),
+                (server_addr, server_port),
+            )
+    
+        where ``server_addr`` and ``server_port`` are the address and port that
+        the server was listening on.
+    
+        If no handler is set, the default behavior is to send new incoming
+        forwarded connections into the accept queue, to be picked up via
+        `accept`.
+    
+        :param str address: the address to bind when forwarding
+        :param int port:
+            the port to forward, or 0 to ask the server to allocate any port
+        :param callable handler:
+            optional handler for incoming forwarded connections, of the form
+            ``func(Channel, (str, int), (str, int))``.
+    
+        :return: the port number (`int`) allocated by the server
+    
+        :raises:
+            `.SSHException` -- if the server refused the TCP forward request
+        """
+        if not self.active:
+            raise SSHException("SSH session not active")
+        port = int(port)
+        response = self.global_request(
+            "tcpip-forward", (address, port), wait=True
+        )
+        if response is None:
+>           raise SSHException("TCP forwarding request denied")
+E           paramiko.ssh_exception.SSHException: TCP forwarding request denied
+
+paramiko/transport.py:1110: SSHException
+----------------------------- Captured stderr call -----------------------------
+[93514.81604576111]	DEBUG:paramiko.transport:EOF in transport thread
+[93520.61295509338]	DEBUG:paramiko.transport:EOF in transport thread
+[93521.94499969482]	DEBUG:paramiko.transport:starting thread (server mode): 0xbd8e8a0
+[93523.31781387329]	DEBUG:paramiko.transport:Local version/idstring: SSH-2.0-paramiko_5.0.0
+[93522.52697944641]	DEBUG:paramiko.transport:starting thread (client mode): 0xcdc9cd0
+[93523.66399765015]	DEBUG:paramiko.transport:Local version/idstring: SSH-2.0-paramiko_5.0.0
+[93523.70285987854]	DEBUG:paramiko.transport:Remote version/idstring: SSH-2.0-paramiko_5.0.0
+[93523.72789382935]	INFO:paramiko.transport:Connected (version 2.0, client paramiko_5.0.0)
+[93524.60813522339]	DEBUG:paramiko.transport:Remote version/idstring: SSH-2.0-paramiko_5.0.0
+[93524.74880218506]	INFO:paramiko.transport:Connected (version 2.0, client paramiko_5.0.0)
+[93525.25091171265]	DEBUG:paramiko.transport:=== Key exchange possibilities ===
+[93525.30598640442]	DEBUG:paramiko.transport:kex algos: mlkem768x25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256, ecdh-sha2-nistp384, ecdh-sha2-nistp521, diffie-hellman-group16-sha512, diffie-hellman-group-exchange-sha256, diffie-hellman-group14-sha256, ext-info-c, kex-strict-c-v00@openssh.com
+[93525.33197402954]	DEBUG:paramiko.transport:server key: rsa-sha2-512, rsa-sha2-256, rsa-sha2-512-cert-v01@openssh.com, rsa-sha2-256-cert-v01@openssh.com
+[93525.35891532898]	DEBUG:paramiko.transport:client encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+[93525.37989616394]	DEBUG:paramiko.transport:server encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+[93525.39610862732]	DEBUG:paramiko.transport:client mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+[93525.41399002075]	DEBUG:paramiko.transport:server mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+[93525.4328250885]	DEBUG:paramiko.transport:client compress: none
+[93525.4499912262]	DEBUG:paramiko.transport:server compress: none
+[93525.46787261963]	DEBUG:paramiko.transport:client lang: <none>
+[93525.58279037476]	DEBUG:paramiko.transport:=== Key exchange possibilities ===
+[93525.68197250366]	DEBUG:paramiko.transport:server lang: <none>
+[93525.81691741943]	DEBUG:paramiko.transport:kex algos: mlkem768x25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256, ecdh-sha2-nistp384, ecdh-sha2-nistp521, diffie-hellman-group16-sha512, diffie-hellman-group-exchange-sha256, diffie-hellman-group14-sha256, kex-strict-s-v00@openssh.com
+[93525.9280204773]	DEBUG:paramiko.transport:kex follows: False
+[93526.11207962036]	DEBUG:paramiko.transport:=== Key exchange agreements ===
+[93526.17287635803]	DEBUG:paramiko.transport:Strict kex mode: True
+[93526.03602409363]	DEBUG:paramiko.transport:server key: rsa-sha2-512, rsa-sha2-256
+[93526.2439250946]	DEBUG:paramiko.transport:Kex: mlkem768x25519-sha256
+[93526.45802497864]	DEBUG:paramiko.transport:client encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+[93526.63087844849]	DEBUG:paramiko.transport:HostKey: rsa-sha2-512
+[93526.78108215332]	DEBUG:paramiko.transport:Cipher: aes128-ctr
+[93526.83091163635]	DEBUG:paramiko.transport:server encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+[93527.38690376282]	DEBUG:paramiko.transport:client mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+[93527.4178981781]	DEBUG:paramiko.transport:server mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+[93527.4429321289]	DEBUG:paramiko.transport:client compress: none
+[93527.47392654419]	DEBUG:paramiko.transport:server compress: none
+[93527.498960495]	DEBUG:paramiko.transport:client lang: <none>
+[93527.517080307]	DEBUG:paramiko.transport:server lang: <none>
+[93527.53376960754]	DEBUG:paramiko.transport:kex follows: False
+[93527.55212783813]	DEBUG:paramiko.transport:=== Key exchange agreements ===
+[93527.5731086731]	DEBUG:paramiko.transport:Strict kex mode: True
+[93527.59885787964]	DEBUG:paramiko.transport:Kex: mlkem768x25519-sha256
+[93527.62389183044]	DEBUG:paramiko.transport:HostKey: rsa-sha2-512
+[93527.64701843262]	DEBUG:paramiko.transport:Cipher: aes128-ctr
+[93526.9730091095]	DEBUG:paramiko.transport:MAC: hmac-sha2-256
+[93527.67181396484]	DEBUG:paramiko.transport:MAC: hmac-sha2-256
+[93527.80795097351]	DEBUG:paramiko.transport:Compression: none
+[93528.24187278748]	DEBUG:paramiko.transport:=== End of kex handshake ===
+[93528.06901931763]	DEBUG:paramiko.transport:Compression: none
+[93528.8758277893]	DEBUG:paramiko.transport:=== End of kex handshake ===
+[93531.39591217041]	DEBUG:paramiko.transport:Resetting outbound seqno after NEWKEYS due to strict mode
+[93531.43692016602]	DEBUG:paramiko.transport:kex engine KexMLKEM768X25519 specified hash_algo <built-in function openssl_sha256>
+[93532.35697746277]	DEBUG:paramiko.transport:Resetting outbound seqno after NEWKEYS due to strict mode
+[93532.5939655304]	DEBUG:paramiko.transport:Switch to new keys ...
+[93532.7079296112]	DEBUG:paramiko.transport:kex engine KexMLKEM768X25519 specified hash_algo <built-in function openssl_sha256>
+[93533.01477432251]	DEBUG:paramiko.transport:Resetting inbound seqno after NEWKEYS due to strict mode
+[93533.20097923279]	DEBUG:paramiko.transport:Switch to new keys ...
+[93533.54406356812]	DEBUG:paramiko.transport:Resetting inbound seqno after NEWKEYS due to strict mode
+[93533.71286392212]	DEBUG:paramiko.transport:Got EXT_INFO: {'server-sig-algs': b'ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,rsa-sha2-512,rsa-sha2-256'}
+[93533.97583961487]	DEBUG:paramiko.transport:Host key verified (ssh-rsa)
+[93534.0359210968]	DEBUG:paramiko.transport:Attempting password auth...
+[93534.10601615906]	DEBUG:paramiko.transport:Sending MSG_SERVICE_REQUEST: ssh-userauth
+[93534.30414199829]	DEBUG:paramiko.transport:MSG_SERVICE_ACCEPT received; auth may begin
+[93641.52979850769]	DEBUG:paramiko.transport:Auth request (type=password) service=ssh-connection, username=slowdive
+[93641.62802696228]	INFO:paramiko.transport:Auth granted (password).
+[93645.33472061157]	INFO:paramiko.transport:Authentication (password) successful!
+[93645.8089351654]	DEBUG:paramiko.transport:[chan 0] Max packet in: 32768 bytes
+[93647.38392829895]	DEBUG:paramiko.transport:[chan 0] Max packet in: 32768 bytes
+[93647.57299423218]	DEBUG:paramiko.transport:[chan 0] Max packet out: 32768 bytes
+[93647.6309299469]	DEBUG:paramiko.transport:Secsh channel 0 (session) opened.
+[93648.40412139893]	DEBUG:paramiko.transport:[chan 0] Max packet out: 32768 bytes
+[93648.48685264587]	DEBUG:paramiko.transport:Secsh channel 0 opened.
+[93648.80013465881]	DEBUG:paramiko.transport:[chan 0] Sesch channel 0 request ok
+[93649.31797981262]	DEBUG:paramiko.transport:Sending global request "tcpip-forward"
+[93649.8019695282]	DEBUG:paramiko.transport:Received global request "tcpip-forward"
+[93649.98483657837]	ERROR:paramiko.transport:Socket exception: Operation not permitted (1)
+[93751.30701065063]	DEBUG:paramiko.transport:EOF in transport thread
+------------------------------ Captured log call -------------------------------
+DEBUG    paramiko.transport:transport.py:1791 EOF in transport thread
+DEBUG    paramiko.transport:transport.py:1791 EOF in transport thread
+DEBUG    paramiko.transport:transport.py:1791 starting thread (server mode): 0xbd8e8a0
+DEBUG    paramiko.transport:transport.py:1791 Local version/idstring: SSH-2.0-paramiko_5.0.0
+DEBUG    paramiko.transport:transport.py:1791 starting thread (client mode): 0xcdc9cd0
+DEBUG    paramiko.transport:transport.py:1791 Local version/idstring: SSH-2.0-paramiko_5.0.0
+DEBUG    paramiko.transport:transport.py:1791 Remote version/idstring: SSH-2.0-paramiko_5.0.0
+INFO     paramiko.transport:transport.py:1791 Connected (version 2.0, client paramiko_5.0.0)
+DEBUG    paramiko.transport:transport.py:1791 Remote version/idstring: SSH-2.0-paramiko_5.0.0
+INFO     paramiko.transport:transport.py:1791 Connected (version 2.0, client paramiko_5.0.0)
+DEBUG    paramiko.transport:transport.py:1791 === Key exchange possibilities ===
+DEBUG    paramiko.transport:transport.py:1791 kex algos: mlkem768x25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256, ecdh-sha2-nistp384, ecdh-sha2-nistp521, diffie-hellman-group16-sha512, diffie-hellman-group-exchange-sha256, diffie-hellman-group14-sha256, ext-info-c, kex-strict-c-v00@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 server key: rsa-sha2-512, rsa-sha2-256, rsa-sha2-512-cert-v01@openssh.com, rsa-sha2-256-cert-v01@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 client encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 server encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 client mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+DEBUG    paramiko.transport:transport.py:1791 server mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+DEBUG    paramiko.transport:transport.py:1791 client compress: none
+DEBUG    paramiko.transport:transport.py:1791 server compress: none
+DEBUG    paramiko.transport:transport.py:1791 client lang: <none>
+DEBUG    paramiko.transport:transport.py:1791 === Key exchange possibilities ===
+DEBUG    paramiko.transport:transport.py:1791 server lang: <none>
+DEBUG    paramiko.transport:transport.py:1791 kex algos: mlkem768x25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256, ecdh-sha2-nistp384, ecdh-sha2-nistp521, diffie-hellman-group16-sha512, diffie-hellman-group-exchange-sha256, diffie-hellman-group14-sha256, kex-strict-s-v00@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 kex follows: False
+DEBUG    paramiko.transport:transport.py:1791 === Key exchange agreements ===
+DEBUG    paramiko.transport:transport.py:1791 Strict kex mode: True
+DEBUG    paramiko.transport:transport.py:1791 server key: rsa-sha2-512, rsa-sha2-256
+DEBUG    paramiko.transport:transport.py:1791 Kex: mlkem768x25519-sha256
+DEBUG    paramiko.transport:transport.py:1791 HostKey: rsa-sha2-512
+DEBUG    paramiko.transport:transport.py:1791 client encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 Cipher: aes128-ctr
+DEBUG    paramiko.transport:transport.py:1791 server encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 client mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+DEBUG    paramiko.transport:transport.py:1791 server mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+DEBUG    paramiko.transport:transport.py:1791 client compress: none
+DEBUG    paramiko.transport:transport.py:1791 server compress: none
+DEBUG    paramiko.transport:transport.py:1791 client lang: <none>
+DEBUG    paramiko.transport:transport.py:1791 server lang: <none>
+DEBUG    paramiko.transport:transport.py:1791 kex follows: False
+DEBUG    paramiko.transport:transport.py:1791 === Key exchange agreements ===
+DEBUG    paramiko.transport:transport.py:1791 Strict kex mode: True
+DEBUG    paramiko.transport:transport.py:1791 Kex: mlkem768x25519-sha256
+DEBUG    paramiko.transport:transport.py:1791 HostKey: rsa-sha2-512
+DEBUG    paramiko.transport:transport.py:1791 Cipher: aes128-ctr
+DEBUG    paramiko.transport:transport.py:1791 MAC: hmac-sha2-256
+DEBUG    paramiko.transport:transport.py:1791 MAC: hmac-sha2-256
+DEBUG    paramiko.transport:transport.py:1791 Compression: none
+DEBUG    paramiko.transport:transport.py:1791 === End of kex handshake ===
+DEBUG    paramiko.transport:transport.py:1791 Compression: none
+DEBUG    paramiko.transport:transport.py:1791 === End of kex handshake ===
+DEBUG    paramiko.transport:transport.py:1791 Resetting outbound seqno after NEWKEYS due to strict mode
+DEBUG    paramiko.transport:transport.py:1791 kex engine KexMLKEM768X25519 specified hash_algo <built-in function openssl_sha256>
+DEBUG    paramiko.transport:transport.py:1791 Resetting outbound seqno after NEWKEYS due to strict mode
+DEBUG    paramiko.transport:transport.py:1791 Switch to new keys ...
+DEBUG    paramiko.transport:transport.py:1791 kex engine KexMLKEM768X25519 specified hash_algo <built-in function openssl_sha256>
+DEBUG    paramiko.transport:transport.py:1791 Resetting inbound seqno after NEWKEYS due to strict mode
+DEBUG    paramiko.transport:transport.py:1791 Switch to new keys ...
+DEBUG    paramiko.transport:transport.py:1791 Resetting inbound seqno after NEWKEYS due to strict mode
+DEBUG    paramiko.transport:transport.py:1791 Got EXT_INFO: {'server-sig-algs': b'ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,rsa-sha2-512,rsa-sha2-256'}
+DEBUG    paramiko.transport:transport.py:1791 Host key verified (ssh-rsa)
+DEBUG    paramiko.transport:transport.py:1791 Attempting password auth...
+DEBUG    paramiko.transport:transport.py:1791 Sending MSG_SERVICE_REQUEST: ssh-userauth
+DEBUG    paramiko.transport:transport.py:1791 MSG_SERVICE_ACCEPT received; auth may begin
+DEBUG    paramiko.transport:transport.py:1791 Auth request (type=password) service=ssh-connection, username=slowdive
+INFO     paramiko.transport:transport.py:1791 Auth granted (password).
+INFO     paramiko.transport:transport.py:1791 Authentication (password) successful!
+DEBUG    paramiko.transport:channel.py:1210 [chan 0] Max packet in: 32768 bytes
+DEBUG    paramiko.transport:channel.py:1210 [chan 0] Max packet in: 32768 bytes
+DEBUG    paramiko.transport:channel.py:1210 [chan 0] Max packet out: 32768 bytes
+DEBUG    paramiko.transport:transport.py:1791 Secsh channel 0 (session) opened.
+DEBUG    paramiko.transport:channel.py:1210 [chan 0] Max packet out: 32768 bytes
+DEBUG    paramiko.transport:transport.py:1791 Secsh channel 0 opened.
+DEBUG    paramiko.transport:channel.py:1210 [chan 0] Sesch channel 0 request ok
+DEBUG    paramiko.transport:transport.py:1791 Sending global request "tcpip-forward"
+DEBUG    paramiko.transport:transport.py:1791 Received global request "tcpip-forward"
+ERROR    paramiko.transport:transport.py:1791 Socket exception: Operation not permitted (1)
+DEBUG    paramiko.transport:transport.py:1791 EOF in transport thread
+__________________ ServiceRequestingTransportTest.test_select __________________
+
+self = <tests.test_transport.ServiceRequestingTransportTest testMethod=test_select>
+
+    def test_select(self):
+        """
+        verify that select() on a channel works.
+        """
+>       self.setup_test_server()
+
+tests/test_transport.py:373: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_transport.py:136: in setup_test_server
+    self.tc.connect(**connect_kwargs)
+paramiko/transport.py:1361: in connect
+    self.auth_password(username, password)
+paramiko/transport.py:3262: in auth_password
+    return self.auth_handler.auth_password(username, password)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+paramiko/auth_handler.py:745: in auth_password
+    return self.send_auth_request(username, "password", finish)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+paramiko/auth_handler.py:708: in send_auth_request
+    return self.wait_for_response(self.auth_event)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <paramiko.auth_handler.AuthOnlyHandler object at 0x10ce543b0>
+event = <threading.Event at 0x10ce55ac0: unset>
+
+    def wait_for_response(self, event):
+        max_ts = None
+        if self.transport.auth_timeout is not None:
+            max_ts = time.time() + self.transport.auth_timeout
+        while True:
+            event.wait(0.1)
+            if not self.transport.is_active():
+                e = self.transport.get_exception()
+                if (e is None) or issubclass(e.__class__, EOFError):
+                    e = AuthenticationException(
+                        "Authentication failed: transport shut down or saw EOF"
+                    )
+                raise e
+            if event.is_set():
+                break
+            if max_ts is not None and max_ts <= time.time():
+>               raise AuthenticationException("Authentication timeout.")
+E               paramiko.ssh_exception.AuthenticationException: Authentication timeout.
+
+paramiko/auth_handler.py:216: AuthenticationException
+----------------------------- Captured stderr call -----------------------------
+[94099.7200012207]	DEBUG:paramiko.transport:starting thread (server mode): 0xc059220
+[94100.05474090576]	DEBUG:paramiko.transport:Local version/idstring: SSH-2.0-paramiko_5.0.0
+[94100.36206245422]	DEBUG:paramiko.transport:starting thread (client mode): 0xc058320
+[94100.56781768799]	DEBUG:paramiko.transport:Local version/idstring: SSH-2.0-paramiko_5.0.0
+[94100.61693191528]	DEBUG:paramiko.transport:Remote version/idstring: SSH-2.0-paramiko_5.0.0
+[94100.6429195404]	DEBUG:paramiko.transport:Remote version/idstring: SSH-2.0-paramiko_5.0.0
+[94100.89778900146]	INFO:paramiko.transport:Connected (version 2.0, client paramiko_5.0.0)
+[94100.77095031738]	INFO:paramiko.transport:Connected (version 2.0, client paramiko_5.0.0)
+[94101.69982910156]	DEBUG:paramiko.transport:=== Key exchange possibilities ===
+[94101.76086425781]	DEBUG:paramiko.transport:kex algos: mlkem768x25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256, ecdh-sha2-nistp384, ecdh-sha2-nistp521, diffie-hellman-group16-sha512, diffie-hellman-group-exchange-sha256, diffie-hellman-group14-sha256, ext-info-c, kex-strict-c-v00@openssh.com
+[94101.92394256592]	DEBUG:paramiko.transport:=== Key exchange possibilities ===
+[94102.15592384338]	DEBUG:paramiko.transport:server key: rsa-sha2-512, rsa-sha2-256, rsa-sha2-512-cert-v01@openssh.com, rsa-sha2-256-cert-v01@openssh.com
+[94102.43391990662]	DEBUG:paramiko.transport:kex algos: mlkem768x25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256, ecdh-sha2-nistp384, ecdh-sha2-nistp521, diffie-hellman-group16-sha512, diffie-hellman-group-exchange-sha256, diffie-hellman-group14-sha256, kex-strict-s-v00@openssh.com
+[94102.45990753174]	DEBUG:paramiko.transport:server key: rsa-sha2-512, rsa-sha2-256
+[94102.52094268799]	DEBUG:paramiko.transport:client encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+[94102.67996788025]	DEBUG:paramiko.transport:client encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+[94102.81205177307]	DEBUG:paramiko.transport:server encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+[94102.8470993042]	DEBUG:paramiko.transport:client mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+[94102.74481773376]	DEBUG:paramiko.transport:server encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+[94103.61790657043]	DEBUG:paramiko.transport:client mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+[94103.67584228516]	DEBUG:paramiko.transport:server mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+[94103.70898246765]	DEBUG:paramiko.transport:client compress: none
+[94103.73091697693]	DEBUG:paramiko.transport:server compress: none
+[94103.74999046326]	DEBUG:paramiko.transport:client lang: <none>
+[94103.40094566345]	DEBUG:paramiko.transport:server mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+[94103.98697853088]	DEBUG:paramiko.transport:server lang: <none>
+[94104.05206680298]	DEBUG:paramiko.transport:client compress: none
+[94104.64382171631]	DEBUG:paramiko.transport:server compress: none
+[94104.66694831848]	DEBUG:paramiko.transport:client lang: <none>
+[94104.1989326477]	DEBUG:paramiko.transport:kex follows: False
+[94104.77089881897]	DEBUG:paramiko.transport:server lang: <none>
+[94105.06772994995]	DEBUG:paramiko.transport:kex follows: False
+[94105.09610176086]	DEBUG:paramiko.transport:=== Key exchange agreements ===
+[94104.95281219482]	DEBUG:paramiko.transport:=== Key exchange agreements ===
+[94105.13377189636]	DEBUG:paramiko.transport:Strict kex mode: True
+[94105.43584823608]	DEBUG:paramiko.transport:Strict kex mode: True
+[94105.56292533875]	DEBUG:paramiko.transport:Kex: mlkem768x25519-sha256
+[94105.66306114197]	DEBUG:paramiko.transport:HostKey: rsa-sha2-512
+[94105.79800605774]	DEBUG:paramiko.transport:Kex: mlkem768x25519-sha256
+[94105.98587989807]	DEBUG:paramiko.transport:Cipher: aes128-ctr
+[94106.35495185852]	DEBUG:paramiko.transport:HostKey: rsa-sha2-512
+[94106.78005218506]	DEBUG:paramiko.transport:MAC: hmac-sha2-256
+[94106.81891441345]	DEBUG:paramiko.transport:Compression: none
+[94106.91094398499]	DEBUG:paramiko.transport:=== End of kex handshake ===
+[94108.38413238525]	DEBUG:paramiko.transport:Cipher: aes128-ctr
+[94108.43873023987]	DEBUG:paramiko.transport:MAC: hmac-sha2-256
+[94108.48188400269]	DEBUG:paramiko.transport:Compression: none
+[94108.50286483765]	DEBUG:paramiko.transport:=== End of kex handshake ===
+[94111.74297332764]	DEBUG:paramiko.transport:Resetting outbound seqno after NEWKEYS due to strict mode
+[94111.91987991333]	DEBUG:paramiko.transport:kex engine KexMLKEM768X25519 specified hash_algo <built-in function openssl_sha256>
+[94114.33291435242]	DEBUG:paramiko.transport:Resetting outbound seqno after NEWKEYS due to strict mode
+[94114.4757270813]	DEBUG:paramiko.transport:kex engine KexMLKEM768X25519 specified hash_algo <built-in function openssl_sha256>
+[94114.55297470093]	DEBUG:paramiko.transport:Switch to new keys ...
+[94115.22006988525]	DEBUG:paramiko.transport:Resetting inbound seqno after NEWKEYS due to strict mode
+[94114.71390724182]	DEBUG:paramiko.transport:Switch to new keys ...
+[94115.54098129272]	DEBUG:paramiko.transport:Got EXT_INFO: {'server-sig-algs': b'ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,rsa-sha2-512,rsa-sha2-256'}
+[94115.63777923584]	DEBUG:paramiko.transport:Resetting inbound seqno after NEWKEYS due to strict mode
+[94116.34111404419]	DEBUG:paramiko.transport:Host key verified (ssh-rsa)
+[94116.37687683105]	DEBUG:paramiko.transport:Attempting password auth...
+[94116.39881134033]	DEBUG:paramiko.transport:Sending MSG_SERVICE_REQUEST: ssh-userauth
+[94117.32387542725]	DEBUG:paramiko.transport:MSG_SERVICE_ACCEPT received; auth may begin
+[94270.88594436646]	DEBUG:paramiko.transport:Auth request (type=password) service=ssh-connection, username=slowdive
+[94271.68011665344]	INFO:paramiko.transport:Auth granted (password).
+[94271.97885513306]	INFO:paramiko.transport:Authentication (password) successful!
+------------------------------ Captured log call -------------------------------
+DEBUG    paramiko.transport:transport.py:1791 starting thread (server mode): 0xc059220
+DEBUG    paramiko.transport:transport.py:1791 Local version/idstring: SSH-2.0-paramiko_5.0.0
+DEBUG    paramiko.transport:transport.py:1791 starting thread (client mode): 0xc058320
+DEBUG    paramiko.transport:transport.py:1791 Local version/idstring: SSH-2.0-paramiko_5.0.0
+DEBUG    paramiko.transport:transport.py:1791 Remote version/idstring: SSH-2.0-paramiko_5.0.0
+DEBUG    paramiko.transport:transport.py:1791 Remote version/idstring: SSH-2.0-paramiko_5.0.0
+INFO     paramiko.transport:transport.py:1791 Connected (version 2.0, client paramiko_5.0.0)
+INFO     paramiko.transport:transport.py:1791 Connected (version 2.0, client paramiko_5.0.0)
+DEBUG    paramiko.transport:transport.py:1791 === Key exchange possibilities ===
+DEBUG    paramiko.transport:transport.py:1791 kex algos: mlkem768x25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256, ecdh-sha2-nistp384, ecdh-sha2-nistp521, diffie-hellman-group16-sha512, diffie-hellman-group-exchange-sha256, diffie-hellman-group14-sha256, ext-info-c, kex-strict-c-v00@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 === Key exchange possibilities ===
+DEBUG    paramiko.transport:transport.py:1791 kex algos: mlkem768x25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256, ecdh-sha2-nistp384, ecdh-sha2-nistp521, diffie-hellman-group16-sha512, diffie-hellman-group-exchange-sha256, diffie-hellman-group14-sha256, kex-strict-s-v00@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 server key: rsa-sha2-512, rsa-sha2-256, rsa-sha2-512-cert-v01@openssh.com, rsa-sha2-256-cert-v01@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 server key: rsa-sha2-512, rsa-sha2-256
+DEBUG    paramiko.transport:transport.py:1791 client encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 client encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 server encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 client mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+DEBUG    paramiko.transport:transport.py:1791 server encrypt: aes128-ctr, aes192-ctr, aes256-ctr, aes128-cbc, aes192-cbc, aes256-cbc, 3des-cbc, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+DEBUG    paramiko.transport:transport.py:1791 client mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+DEBUG    paramiko.transport:transport.py:1791 server mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+DEBUG    paramiko.transport:transport.py:1791 client compress: none
+DEBUG    paramiko.transport:transport.py:1791 server compress: none
+DEBUG    paramiko.transport:transport.py:1791 client lang: <none>
+DEBUG    paramiko.transport:transport.py:1791 server mac: hmac-sha2-256, hmac-sha2-512, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1, hmac-md5, hmac-sha1-96, hmac-md5-96
+DEBUG    paramiko.transport:transport.py:1791 server lang: <none>
+DEBUG    paramiko.transport:transport.py:1791 client compress: none
+DEBUG    paramiko.transport:transport.py:1791 server compress: none
+DEBUG    paramiko.transport:transport.py:1791 client lang: <none>
+DEBUG    paramiko.transport:transport.py:1791 kex follows: False
+DEBUG    paramiko.transport:transport.py:1791 server lang: <none>
+DEBUG    paramiko.transport:transport.py:1791 kex follows: False
+DEBUG    paramiko.transport:transport.py:1791 === Key exchange agreements ===
+DEBUG    paramiko.transport:transport.py:1791 === Key exchange agreements ===
+DEBUG    paramiko.transport:transport.py:1791 Strict kex mode: True
+DEBUG    paramiko.transport:transport.py:1791 Kex: mlkem768x25519-sha256
+DEBUG    paramiko.transport:transport.py:1791 Strict kex mode: True
+DEBUG    paramiko.transport:transport.py:1791 HostKey: rsa-sha2-512
+DEBUG    paramiko.transport:transport.py:1791 Kex: mlkem768x25519-sha256
+DEBUG    paramiko.transport:transport.py:1791 Cipher: aes128-ctr
+DEBUG    paramiko.transport:transport.py:1791 MAC: hmac-sha2-256
+DEBUG    paramiko.transport:transport.py:1791 Compression: none
+DEBUG    paramiko.transport:transport.py:1791 === End of kex handshake ===
+DEBUG    paramiko.transport:transport.py:1791 HostKey: rsa-sha2-512
+DEBUG    paramiko.transport:transport.py:1791 Cipher: aes128-ctr
+DEBUG    paramiko.transport:transport.py:1791 MAC: hmac-sha2-256
+DEBUG    paramiko.transport:transport.py:1791 Compression: none
+DEBUG    paramiko.transport:transport.py:1791 === End of kex handshake ===
+DEBUG    paramiko.transport:transport.py:1791 Resetting outbound seqno after NEWKEYS due to strict mode
+DEBUG    paramiko.transport:transport.py:1791 kex engine KexMLKEM768X25519 specified hash_algo <built-in function openssl_sha256>
+DEBUG    paramiko.transport:transport.py:1791 Resetting outbound seqno after NEWKEYS due to strict mode
+DEBUG    paramiko.transport:transport.py:1791 kex engine KexMLKEM768X25519 specified hash_algo <built-in function openssl_sha256>
+DEBUG    paramiko.transport:transport.py:1791 Switch to new keys ...
+DEBUG    paramiko.transport:transport.py:1791 Resetting inbound seqno after NEWKEYS due to strict mode
+DEBUG    paramiko.transport:transport.py:1791 Switch to new keys ...
+DEBUG    paramiko.transport:transport.py:1791 Got EXT_INFO: {'server-sig-algs': b'ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,rsa-sha2-512,rsa-sha2-256'}
+DEBUG    paramiko.transport:transport.py:1791 Resetting inbound seqno after NEWKEYS due to strict mode
+DEBUG    paramiko.transport:transport.py:1791 Host key verified (ssh-rsa)
+DEBUG    paramiko.transport:transport.py:1791 Attempting password auth...
+DEBUG    paramiko.transport:transport.py:1791 Sending MSG_SERVICE_REQUEST: ssh-userauth
+DEBUG    paramiko.transport:transport.py:1791 MSG_SERVICE_ACCEPT received; auth may begin
+DEBUG    paramiko.transport:transport.py:1791 Auth request (type=password) service=ssh-connection, username=slowdive
+INFO     paramiko.transport:transport.py:1791 Auth granted (password).
+INFO     paramiko.transport:transport.py:1791 Authentication (password) successful!
+--------------------------- Captured stderr teardown ---------------------------
+[124342.17691421509]	DEBUG:paramiko.transport:EOF in transport thread
+[124383.21089744568]	DEBUG:paramiko.transport:EOF in transport thread
+=============================== warnings summary ===============================
+tests/_util.py:88
+  /Users/apple/.local/share/pair-wise-gsb/workspaces/GSB-20260920-70-01-uid41-100/GSB-20260923-066/A/tests/_util.py:88: PytestCollectionWarning: cannot collect test class 'TestServer' because it has a __init__ constructor (from: tests/test_kex.py)
+    class TestServer(ServerInterface):
+
+.venv/lib/python3.12/site-packages/_pytest/python.py:124
+  /Users/apple/.local/share/pair-wise-gsb/workspaces/GSB-20260920-70-01-uid41-100/GSB-20260923-066/A/.venv/lib/python3.12/site-packages/_pytest/python.py:124: PytestRemovedIn10Warning: Passing a non-Collection iterable to parametrize is deprecated.
+  Test: tests/test_transport.py::TestStrictKex::test_mode_agreement, argvalues type: product
+  Please convert to a list or tuple.
+  See https://docs.pytest.org/en/stable/deprecations.html#parametrize-iterators
+    metafunc.parametrize(*marker.args, **marker.kwargs, _param_mark=marker)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_client.py::SSHClientTest::test_auth_trickledown - Permissio...
+FAILED tests/test_client.py::SSHClientTest::test_auto_add_policy - Permission...[126984.57407951355]	DEBUG:paramiko.transport:EOF in transport thread
+[127005.34105300903]	DEBUG:paramiko.transport:EOF in transport thread
+[127005.38396835327]	DEBUG:paramiko.transport:EOF in transport thread
+
+FAILED tests/test_client.py::SSHClientTest::test_banner_timeout - PermissionE...
+FAILED tests/test_client.py::SSHClientTest::test_certs_allowed_as_key_filename_values
+FAILED tests/test_client.py::SSHClientTest::test_certs_implicitly_loaded_alongside_key_filename_keys
+FAILED tests/test_client.py::SSHClientTest::test_channel_timeout - Permission...
+FAILED tests/test_client.py::SSHClientTest::test_cleanup - PermissionError: [...
+FAILED tests/test_client.py::SSHClientTest::test_client - PermissionError: [E...
+FAILED tests/test_client.py::SSHClientTest::test_client_can_be_used_as_context_manager
+FAILED tests/test_client.py::SSHClientTest::test_client_ecdsa - PermissionErr...
+FAILED tests/test_client.py::SSHClientTest::test_client_ed25519 - PermissionE...
+FAILED tests/test_client.py::SSHClientTest::test_client_rsa - PermissionError...
+FAILED tests/test_client.py::SSHClientTest::test_closes_socket_on_socket_errors
+FAILED tests/test_client.py::SSHClientTest::test_default_key_locations_trigger_cert_loads_if_found
+FAILED tests/test_client.py::SSHClientTest::test_disabled_algorithms_defaults_to_None
+FAILED tests/test_client.py::SSHClientTest::test_disabled_algorithms_passed_directly_if_given
+FAILED tests/test_client.py::SSHClientTest::test_host_key_negotiation_1 - Per...
+FAILED tests/test_client.py::SSHClientTest::test_host_key_negotiation_2 - Per...
+FAILED tests/test_client.py::SSHClientTest::test_host_key_negotiation_3 - Per...
+FAILED tests/test_client.py::SSHClientTest::test_host_key_negotiation_4 - Per...
+FAILED tests/test_client.py::SSHClientTest::test_missing_key_policy_accepts_classes_or_instances
+FAILED tests/test_client.py::SSHClientTest::test_multiple_key_files - Permiss...
+FAILED tests/test_client.py::SSHClientTest::test_multiple_key_files_failure
+FAILED tests/test_client.py::SSHClientTest::test_reject_policy - PermissionEr...
+FAILED tests/test_client.py::SSHClientTest::test_save_host_keys - PermissionE...
+FAILED tests/test_client.py::SSHClientTest::test_transport_factory_defaults_to_Transport
+FAILED tests/test_client.py::SSHClientTest::test_transport_factory_may_be_specified
+FAILED tests/test_client.py::SSHClientTest::test_update_environment - Permiss...
+FAILED tests/test_client.py::PasswordPassphraseTests::test_passphrase_kwarg_not_used_for_password_auth
+FAILED tests/test_client.py::PasswordPassphraseTests::test_passphrase_kwarg_used_for_key_passphrase
+FAILED tests/test_client.py::PasswordPassphraseTests::test_password_kwarg_not_used_for_passphrase_when_passphrase_kwarg_given
+FAILED tests/test_client.py::PasswordPassphraseTests::test_password_kwarg_used_for_passphrase_when_no_passphrase_kwarg_given
+FAILED tests/test_client.py::PasswordPassphraseTests::test_password_kwarg_works_for_password_auth
+FAILED tests/test_transport.py::TransportTest::test_port_forwarding - Permiss...
+FAILED tests/test_transport.py::TransportTest::test_reverse_port_forwarding
+FAILED tests/test_transport.py::ServiceRequestingTransportTest::test_port_forwarding
+FAILED tests/test_transport.py::ServiceRequestingTransportTest::test_reverse_port_forwarding
+FAILED tests/test_transport.py::ServiceRequestingTransportTest::test_select
+38 failed, 515 passed, 15 skipped, 1 deselected, 2 warnings, 13 subtests passed in 126.71s (0:02:06)

@@ -8,7 +8,7 @@ Replaces certain parts of `.SSHClient`. For a concrete implementation, see the
 from collections import namedtuple
 
 from .agent import AgentKey
-from .ssh_exception import AuthenticationException
+from .ssh_exception import AuthenticationException, PartialAuthentication
 from .util import get_logger
 
 
@@ -19,7 +19,17 @@ class AuthSource:
     See subclasses in this module for concrete implementations.
 
     All implementations must accept at least a ``username`` (``str``) kwarg.
+
+    .. note::
+        Subclasses may set the ``methods`` class attribute to a tuple of SSH
+        userauth method names (such as ``"password"`` or ``"publickey"``)
+        they are capable of driving. `AuthStrategy` uses this to skip sources
+        which cannot satisfy the server's currently allowed methods during
+        multi-step authentication. The default of ``None`` means "unknown",
+        in which case the source is always tried.
     """
+
+    methods = None
 
     def __init__(self, username):
         self.username = username
@@ -46,6 +56,8 @@ class NoneAuth(AuthSource):
     Auth type "none", ie https://www.rfc-editor.org/rfc/rfc4252#section-5.2 .
     """
 
+    methods = ("none",)
+
     def authenticate(self, transport):
         return transport.auth_none(self.username)
 
@@ -64,6 +76,11 @@ class Password(AuthSource):
         also, shame on you!) or ``lambda: variable_name`` (for something stored
         in a variable).
     """
+
+    # NOTE: Transport.auth_password automatically falls back to
+    # keyboard-interactive when the server doesn't allow plain password auth,
+    # so this source can drive either method.
+    methods = ("password", "keyboard-interactive")
 
     def __init__(self, username, password_getter):
         super().__init__(username=username)
@@ -98,6 +115,8 @@ class PrivateKey(AuthSource):
     either in their ``__init__``, or in an overridden ``authenticate`` prior to
     its `super` call.
     """
+
+    methods = ("publickey",)
 
     def authenticate(self, transport):
         return transport.auth_publickey(self.username, self.pkey)
@@ -273,15 +292,57 @@ class AuthStrategy:
         # wants to live in fabric.OpenSSHAuthStrategy as not all target servers
         # will implement it!
         # TODO: needs better "server told us too many attempts" checking!
+        # Auth methods the server currently allows, per its most recent
+        # partial-auth response; None means "no constraints known yet".
+        allowed = None
+        # Sources which already completed one stage of a multi-step auth;
+        # re-submitting them cannot make progress, so they get skipped.
+        completed = []
         for source in self.get_sources():
+            # Don't re-submit a source which already completed a stage; the
+            # server has already accepted that stage from this credential.
+            if source in completed:
+                self.log.debug(
+                    f"Skipping {source}: already completed an auth stage"
+                )
+                continue
+            # Only try sources able to drive a currently allowed method.
+            methods = getattr(source, "methods", None)
+            if (
+                allowed is not None
+                and methods is not None
+                and not set(methods) & set(allowed)
+            ):
+                self.log.debug(
+                    f"Skipping {source}: server only allows {allowed}"
+                )
+                continue
             self.log.debug(f"Trying {source}")
             try:  # NOTE: this really wants to _only_ wrap the authenticate()!
                 result = source.authenticate(transport)
-                succeeded = True
-            # TODO: 'except PartialAuthentication' is needed for 2FA and
-            # similar, as per old SSHClient.connect - it is the only way
-            # AuthHandler supplies access to the 'name-list' field from
-            # MSG_USERAUTH_FAILURE, at present.
+                # A normal return value is the list of methods permissible
+                # for any next stage; only the transport's own state says
+                # whether authentication is actually complete.
+                if transport.is_authenticated():
+                    succeeded = True
+                else:
+                    allowed = result
+                    completed.append(source)
+                    self.log.info(
+                        f"Partial authentication via {source}; "
+                        f"remaining methods: {result}"
+                    )
+            # Partial auth may also surface as an exception, depending on
+            # the AuthSource implementation; treat it like a returned
+            # remaining-methods list.
+            except PartialAuthentication as e:
+                result = e
+                allowed = e.allowed_types
+                completed.append(source)
+                self.log.info(
+                    f"Partial authentication via {source}; "
+                    f"remaining methods: {e.allowed_types}"
+                )
             except Exception as e:
                 result = e
                 # TODO: look at what this could possibly raise, we don't really

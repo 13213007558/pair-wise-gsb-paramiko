@@ -89,6 +89,7 @@ class TestServer(ServerInterface):
     paranoid_did_password = False
     paranoid_did_public_key = False
     paranoid_key = Ed25519Key.from_private_key_file(_support("ed25519.key"))
+    paranoid2_did_public_key = False
 
     def __init__(self, allowed_keys=None):
         self.allowed_keys = allowed_keys if allowed_keys is not None else []
@@ -155,6 +156,11 @@ class TestServer(ServerInterface):
                 return "publickey"
             else:
                 return "password"
+        if username == "paranoid2":
+            # 2-part auth: publickey, then keyboard-interactive
+            if not self.paranoid2_did_public_key:
+                return "publickey"
+            return "keyboard-interactive"
         if username == "commie":
             return "keyboard-interactive"
         if username == "utf8":
@@ -190,6 +196,10 @@ class TestServer(ServerInterface):
             if self.paranoid_did_password:
                 return AUTH_SUCCESSFUL
             return AUTH_PARTIALLY_SUCCESSFUL
+        if (username == "paranoid2") and (key == self.paranoid_key):
+            # 2-part auth: publickey, then keyboard-interactive
+            self.paranoid2_did_public_key = True
+            return AUTH_PARTIALLY_SUCCESSFUL
         # TODO: make sure all tests incidentally using this to pass, _without
         # sending a username oops_, get updated somehow - probably via server()
         # default always injecting a username
@@ -198,7 +208,9 @@ class TestServer(ServerInterface):
         return AUTH_FAILED
 
     def check_auth_interactive(self, username, submethods):
-        if username == "commie":
+        if username == "commie" or (
+            username == "paranoid2" and self.paranoid2_did_public_key
+        ):
             self.username = username
             return InteractiveQuery(
                 "password", "Please enter a password.", ("Password", False)
@@ -206,7 +218,7 @@ class TestServer(ServerInterface):
         return AUTH_FAILED
 
     def check_auth_interactive_response(self, responses):
-        if self.username == "commie":
+        if self.username in ("commie", "paranoid2"):
             if (len(responses) == 1) and (responses[0] == "cat"):
                 return AUTH_SUCCESSFUL
         return AUTH_FAILED

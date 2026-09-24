@@ -62,6 +62,7 @@ from paramiko.ssh_exception import (
     IncompatiblePeer,
     MessageOrderError,
     PasswordRequiredException,
+    PartialAuthentication,
     ProxyCommandFailure,
     SSHException,
 )
