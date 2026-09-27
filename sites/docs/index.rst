@@ -50,6 +50,7 @@ Authentication & keys
     api/auth
     api/agent
     api/hostkeys
+    api/hostcerts
     api/keys
 
 

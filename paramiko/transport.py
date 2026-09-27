@@ -787,6 +787,14 @@ class Transport(threading.Thread, ClosingContextManager):
         :param .PKey key:
             the host key (instance of some subclass) to add
         """
+        # A key carrying an OpenSSH certificate is offered only under its
+        # certificate algorithm name, so clients actually negotiate the
+        # certificate form.  (Add a separate, certificate-less key object to
+        # also serve the plain key.)
+        public_blob = getattr(key, "public_blob", None)
+        if public_blob is not None:
+            self.server_key_dict[public_blob.key_type] = key
+            return
         self.server_key_dict[key.get_name()] = key
         # Handle SHA-2 extensions for RSA by ensuring that lookups into
         # self.server_key_dict will yield this key for any of the algorithm
@@ -794,6 +802,21 @@ class Transport(threading.Thread, ClosingContextManager):
         if isinstance(key, RSAKey):
             self.server_key_dict["rsa-sha2-256"] = key
             self.server_key_dict["rsa-sha2-512"] = key
+
+    def _get_server_key_blob(self):
+        """
+        Public blob of the active server host key, as sent during key
+        exchange.  When the certificate algorithm was negotiated for a
+        certificate-bearing key, this is the certificate itself.
+        """
+        key = self.get_server_key()
+        public_blob = getattr(key, "public_blob", None)
+        if (
+            public_blob is not None
+            and self.host_key_type == public_blob.key_type
+        ):
+            return public_blob.key_blob
+        return key.asbytes()
 
     def get_server_key(self):
         """

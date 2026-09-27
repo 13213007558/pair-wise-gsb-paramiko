@@ -125,6 +125,9 @@ class FakeTransport:
     def get_server_key(self):
         return FakeKey()
 
+    def _get_server_key_blob(self):
+        return self.get_server_key().asbytes()
+
     def _get_modulus_pack(self):
         return FakeModulusPack()
 

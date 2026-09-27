@@ -33,6 +33,7 @@ from paramiko.common import DEBUG
 from paramiko.config import SSH_PORT
 from paramiko.ecdsakey import ECDSAKey
 from paramiko.ed25519key import Ed25519Key
+from paramiko.hostcerts import ED25519_CERT_TYPE
 from paramiko.hostkeys import HostKeys
 from paramiko.rsakey import RSAKey
 from paramiko.ssh_exception import (
@@ -70,6 +71,7 @@ class SSHClient(ClosingContextManager):
         """
         self._system_host_keys = HostKeys()
         self._host_keys = HostKeys()
+        self._host_cert_verifier = None
         self._host_keys_filename = None
         self._log_channel = None
         self._policy = RejectPolicy()
@@ -188,6 +190,46 @@ class SSHClient(ClosingContextManager):
         if inspect.isclass(policy):
             policy = policy()
         self._policy = policy
+
+    def set_host_certificate_verifier(self, verifier):
+        """
+        Set the verifier used when a server presents an OpenSSH host
+        certificate (currently only
+        ``ssh-ed25519-cert-v01@openssh.com``) as its host key.
+
+        The verifier (a `.HostCertificateVerifier`) holds the explicitly
+        trusted CA public keys and the range of hosts each CA may vouch for;
+        see `.HostCertificateVerifier.add_ca_key`.
+
+        When a verifier is in place, a server certificate that validates
+        successfully is accepted without consulting the known-hosts
+        databases or the missing-host-key policy.  Any validation failure
+        (including connecting without a verifier configured) terminates the
+        connection - it is never handed to the missing-host-key policy, and
+        nothing is added to the known-hosts files.
+
+        :param verifier: a `.HostCertificateVerifier`, or ``None`` to
+            stop accepting host certificates
+
+        .. versionadded:: 3.6
+        """
+        self._host_cert_verifier = verifier
+
+    def _verify_host_certificate(self, server_key, hostname):
+        """
+        Verify a host certificate presented by the server.
+
+        Raises (and thus terminates the connection) on any problem; never
+        falls back to the missing-host-key policy or records anything in the
+        known-hosts structures.
+        """
+        verifier = self._host_cert_verifier
+        if verifier is None:
+            raise SSHException(
+                "Server presented a host certificate, but no host "
+                "certificate verifier is configured"
+            )
+        verifier.verify(server_key, hostname)
 
     def _families_and_addresses(self, hostname, port):
         """
@@ -443,7 +485,19 @@ class SSHClient(ClosingContextManager):
         t.start_client(timeout=timeout)
 
         server_key = t.get_remote_server_key()
-        if our_server_keys is None:
+        server_key_blob = getattr(server_key, "public_blob", None)
+        if (
+            server_key_blob is not None
+            and server_key_blob.key_type == ED25519_CERT_TYPE
+        ):
+            # The server presented an OpenSSH host certificate: verify it
+            # against the explicitly configured CA trust (or raise).  This
+            # path never falls through to the missing-host-key policy, and
+            # never stores anything in the known-hosts structures.  Note the
+            # certificate principals are matched against the bare hostname,
+            # not the (possibly port-decorated) known-hosts identity.
+            self._verify_host_certificate(server_key, hostname)
+        elif our_server_keys is None:
             # will raise exception if the key is rejected
             self._policy.missing_host_key(
                 self, server_hostkey_name, server_key
