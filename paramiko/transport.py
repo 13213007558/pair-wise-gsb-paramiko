@@ -590,7 +590,11 @@ class Transport(threading.Thread, ClosingContextManager):
         filtered = self._filter_algorithm("keys")
         return tuple(
             filtered
-            + tuple("{}-cert-v01@openssh.com".format(x) for x in filtered)
+            + tuple(
+                "{}-cert-v01@openssh.com".format(x)
+                for x in filtered
+                if not x.endswith("-cert-v01@openssh.com")
+            )
         )
 
     @property
@@ -794,6 +798,31 @@ class Transport(threading.Thread, ClosingContextManager):
         if isinstance(key, RSAKey):
             self.server_key_dict["rsa-sha2-256"] = key
             self.server_key_dict["rsa-sha2-512"] = key
+        # Keys with an OpenSSH certificate loaded are also offered under
+        # their certificate algorithm name, so clients configured to verify
+        # host certificates can negotiate them. (The plain key algorithm
+        # remains registered above for clients that do not.)
+        public_blob = getattr(key, "public_blob", None)
+        if public_blob is not None and public_blob.key_type.endswith(
+            "-cert-v01@openssh.com"
+        ):
+            self.server_key_dict[public_blob.key_type] = key
+
+    def _get_server_key_bytes(self):
+        """
+        Wire representation of the active server host key.
+
+        When a certificate algorithm was negotiated, this is the certificate
+        blob itself (which is its own network representation); otherwise
+        it is the plain public key blob.
+        """
+        key = self.get_server_key()
+        host_key_type = self.host_key_type or ""
+        if host_key_type.endswith("-cert-v01@openssh.com"):
+            public_blob = getattr(key, "public_blob", None)
+            if public_blob is not None:
+                return public_blob.key_blob
+        return key.asbytes()
 
     def get_server_key(self):
         """

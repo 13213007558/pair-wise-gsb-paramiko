@@ -59,6 +59,7 @@ from paramiko.ssh_exception import (
     ChannelException,
     ConfigParseError,
     CouldNotCanonicalize,
+    HostCertificateError,
     IncompatiblePeer,
     MessageOrderError,
     PasswordRequiredException,
@@ -82,6 +83,7 @@ from paramiko.file import BufferedFile
 from paramiko.agent import Agent, AgentKey
 from paramiko.pkey import PKey, PublicBlob, UnknownKeyType
 from paramiko.hostkeys import HostKeys
+from paramiko.hostcerts import HostCertificateVerifier, OpenSSHCertificate
 from paramiko.config import SSHConfig, SSHConfigDict
 from paramiko.proxy import ProxyCommand
 

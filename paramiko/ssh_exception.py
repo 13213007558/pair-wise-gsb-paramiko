@@ -140,6 +140,19 @@ class BadHostKeyException(SSHException):
         )
 
 
+class HostCertificateError(SSHException):
+    """
+    The host certificate presented by the SSH server failed validation.
+
+    This is raised when a server presents an OpenSSH host certificate
+    (``*-cert-v01@openssh.com``) which does not verify against the
+    application's configured certificate authorities, is expired, is not
+    valid for the target host, or is otherwise unacceptable.
+    """
+
+    pass
+
+
 class IncompatiblePeer(SSHException):
     """
     A disagreement arose regarding an algorithm required for key exchange.

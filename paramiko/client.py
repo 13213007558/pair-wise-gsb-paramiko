@@ -34,6 +34,7 @@ from paramiko.config import SSH_PORT
 from paramiko.ecdsakey import ECDSAKey
 from paramiko.ed25519key import Ed25519Key
 from paramiko.hostkeys import HostKeys
+from paramiko.hostcerts import CERT_SUFFIX, ED25519_CERT_KEY_TYPE
 from paramiko.rsakey import RSAKey
 from paramiko.ssh_exception import (
     BadHostKeyException,
@@ -71,6 +72,7 @@ class SSHClient(ClosingContextManager):
         self._system_host_keys = HostKeys()
         self._host_keys = HostKeys()
         self._host_keys_filename = None
+        self._host_cert_verifier = None
         self._log_channel = None
         self._policy = RejectPolicy()
         self._transport = None
@@ -188,6 +190,34 @@ class SSHClient(ClosingContextManager):
         if inspect.isclass(policy):
             policy = policy()
         self._policy = policy
+
+    def set_host_certificate_verifier(self, verifier):
+        """
+        Configure verification of OpenSSH host certificates.
+
+        When a verifier is set, this client prefers certificate host key
+        algorithms during key exchange. If the server then presents a
+        host certificate, the certificate is validated against the
+        verifier's configured certificate authorities instead of the
+        known-hosts key sets:
+
+        * A successfully verified certificate authenticates the host on
+          its own; known-hosts entries are neither consulted nor
+          updated, and the missing host key policy is not invoked.
+        * Any validation failure raises
+          `.ssh_exception.HostCertificateError` and terminates the
+          connection; it is never delegated to the missing host key
+          policy (e.g. `.AutoAddPolicy`).
+
+        Servers presenting plain (non-certificate) host keys are
+        unaffected and continue to use the regular known-hosts/policy
+        mechanisms.
+
+        :param .HostCertificateVerifier verifier:
+            the verifier to use for host certificates, or ``None`` to
+            stop preferring/accepting host certificates.
+        """
+        self._host_cert_verifier = verifier
 
     def _families_and_addresses(self, hostname, port):
         """
@@ -440,10 +470,42 @@ class SSHClient(ClosingContextManager):
             other_types = [x for x in sec_opts.key_types if x != keytype]
             sec_opts.key_types = [keytype] + other_types
 
+        if self._host_cert_verifier is not None:
+            # Prefer certificate host key algorithms so that servers
+            # offering host certificates actually present them; the
+            # certificate itself is verified once key exchange completes.
+            sec_opts = t.get_security_options()
+            key_types = [ED25519_CERT_KEY_TYPE] + [
+                x for x in sec_opts.key_types if x != ED25519_CERT_KEY_TYPE
+            ]
+            sec_opts.key_types = key_types
+
         t.start_client(timeout=timeout)
 
         server_key = t.get_remote_server_key()
-        if our_server_keys is None:
+        public_blob = getattr(server_key, "public_blob", None)
+        if public_blob is not None and public_blob.key_type.endswith(
+            CERT_SUFFIX
+        ):
+            # The server presented an OpenSSH host certificate: it must
+            # verify against the configured CA trust (keyed by the bare
+            # hostname, not any [host]:port known-hosts identity). Any
+            # failure is fatal and is never delegated to the missing
+            # host key policy, nor recorded in the host key sets.
+            if self._host_cert_verifier is None:
+                t.close()
+                raise SSHException(
+                    "Server {!r} presented a host certificate, but no "
+                    "host certificate verifier is configured".format(
+                        hostname
+                    )
+                )
+            try:
+                self._host_cert_verifier.verify(server_key, hostname)
+            except Exception:
+                t.close()
+                raise
+        elif our_server_keys is None:
             # will raise exception if the key is rejected
             self._policy.missing_host_key(
                 self, server_hostkey_name, server_key
