@@ -37,10 +37,24 @@ from paramiko.pkey import PKey, UnknownKeyType
 from paramiko.ssh_exception import AuthenticationException, SSHException
 from paramiko.util import asbytes, get_logger
 
+_log = get_logger("paramiko.agent")
+
 cSSH2_AGENTC_REQUEST_IDENTITIES = byte_chr(11)
 SSH2_AGENT_IDENTITIES_ANSWER = 12
 cSSH2_AGENTC_SIGN_REQUEST = byte_chr(13)
 SSH2_AGENT_SIGN_RESPONSE = 14
+
+# Protocol numbers for the OpenSSH agent extension subsystem (see OpenSSH's
+# PROTOCOL.agent): generic extension requests, and their possible replies.
+SSH_AGENT_FAILURE = 5
+SSH_AGENT_SUCCESS = 6
+cSSH2_AGENT_EXTENSION = byte_chr(27)
+SSH_AGENT_EXTENSION_FAILURE = 28
+
+#: Name of the OpenSSH agent extension binding a connection to one session.
+SESSION_BIND_EXTENSION = "session-bind@openssh.com"
+#: Name of the OpenSSH global request proving ownership of a host key.
+HOSTKEYS_PROVE_REQUEST = "hostkeys-prove@openssh.com"
 
 SSH_AGENT_RSA_SHA2_256 = 2
 SSH_AGENT_RSA_SHA2_512 = 4
@@ -55,6 +69,43 @@ ALGORITHM_FLAG_MAP = {
 }
 for key, value in list(ALGORITHM_FLAG_MAP.items()):
     ALGORITHM_FLAG_MAP[f"{key}-cert-v01@openssh.com"] = value
+
+class SessionBindError(SSHException):
+    """
+    The ``session-bind@openssh.com`` handshake could not be completed.
+
+    This covers the server being unable to prove its host key, the agent
+    not supporting (or refusing) the extension, and malformed replies.
+    """
+
+
+class SessionBindConnectionLost(SessionBindError):
+    """
+    The agent dropped the connection while attempting to bind the session.
+
+    Some older agents close the connection when they receive a message
+    type they do not understand; the connection must not be reused.
+    """
+
+
+def _read_all(conn, wanted):
+    result = conn.recv(wanted)
+    while len(result) < wanted:
+        if len(result) == 0:
+            raise SSHException("lost ssh-agent")
+        extra = conn.recv(wanted - len(result))
+        if len(extra) == 0:
+            raise SSHException("lost ssh-agent")
+        result += extra
+    return result
+
+
+def _send_message(conn, msg):
+    msg = asbytes(msg)
+    conn.send(struct.pack(">I", len(msg)) + msg)
+    data = _read_all(conn, 4)
+    msg = Message(_read_all(conn, struct.unpack(">I", data)[0]))
+    return ord(msg.get_byte()), msg
 
 
 # TODO (backwards incompat): rename all these - including making some of their
@@ -102,22 +153,136 @@ class AgentSSH:
         self._keys = ()
 
     def _send_message(self, msg):
-        msg = asbytes(msg)
-        self._conn.send(struct.pack(">I", len(msg)) + msg)
-        data = self._read_all(4)
-        msg = Message(self._read_all(struct.unpack(">I", data)[0]))
-        return ord(msg.get_byte()), msg
+        return _send_message(self._conn, msg)
 
     def _read_all(self, wanted):
-        result = self._conn.recv(wanted)
-        while len(result) < wanted:
-            if len(result) == 0:
-                raise SSHException("lost ssh-agent")
-            extra = self._conn.recv(wanted - len(result))
-            if len(extra) == 0:
-                raise SSHException("lost ssh-agent")
-            result += extra
-        return result
+        return _read_all(self._conn, wanted)
+
+
+class AgentSessionBinder:
+    """
+    Binds an agent connection to a single SSH session, using OpenSSH's
+    ``session-bind@openssh.com`` agent extension.
+
+    A forwarded agent connection may otherwise be used by the destination
+    host (or anyone able to reach the forwarded socket) to sign
+    authentication requests for *any* server. Binding the connection tells
+    the agent which (host key, session ID) pair it belongs to, proved by a
+    signature the server made over the session ID with its private host
+    key (obtained via the ``hostkeys-prove@openssh.com`` global
+    request). Agents supporting the extension will then refuse to use the
+    connection for any other session.
+
+    The binding always uses the real host key and session ID of the given
+    `.Transport`, and ``is_forwarding`` records whether the
+    connection is a forwarded one or the client's own local connection, so
+    the two are never confused.
+
+    Live transport state is read on every `bind` call and nothing is
+    cached, so reconnecting or switching to a new `.Transport` (and thus a
+    new session ID) can never reuse a stale binding.
+
+    .. versionadded:: 5.1
+    """
+
+    def __init__(self, transport, is_forwarding=True):
+        """
+        :param .Transport transport:
+            the client transport whose session the agent connection will
+            be bound to.
+        :param bool is_forwarding:
+            ``True`` (the default) when binding a forwarded agent
+            connection; ``False`` when binding the client's own
+            local agent connection.
+        """
+        self._transport = transport
+        self._is_forwarding = is_forwarding
+
+    def bind(self, conn):
+        """
+        Perform the binding handshake on an agent connection.
+
+        Must be called before any other traffic (in particular any sign
+        request) is sent over ``conn``.
+
+        :param conn: a socket-like connection to the agent.
+
+        :raises SessionBindConnectionLost:
+            if the agent dropped the connection; it must not be reused.
+        :raises SessionBindError:
+            if the server cannot prove its host key, or the agent does
+            not support or refused the extension.
+        """
+        msg, hostkey = self._build_bind_message()
+        try:
+            ptype, _ = _send_message(conn, msg)
+        except (SSHException, OSError, EOFError) as e:
+            raise SessionBindConnectionLost(
+                "agent dropped the connection during session bind"
+            ) from e
+        if ptype == SSH_AGENT_SUCCESS:
+            _log.info(
+                "Bound agent connection to session of host key %s "
+                "(is_forwarding=%s)",
+                hostkey.fingerprint,
+                self._is_forwarding,
+            )
+            return
+        if ptype in (SSH_AGENT_FAILURE, SSH_AGENT_EXTENSION_FAILURE):
+            _log.debug(
+                "Agent does not support or refused %s (host key %s)",
+                SESSION_BIND_EXTENSION,
+                hostkey.fingerprint,
+            )
+            raise SessionBindError(
+                "agent does not support or refused {}".format(
+                    SESSION_BIND_EXTENSION
+                )
+            )
+        raise SessionBindError(
+            "unexpected response type {!r} to {}".format(
+                ptype, SESSION_BIND_EXTENSION
+            )
+        )
+
+    def _build_bind_message(self):
+        transport = self._transport
+        session_id = getattr(transport, "session_id", None)
+        if not session_id:
+            raise SessionBindError(
+                "cannot bind agent session: transport has no session ID"
+            )
+        try:
+            hostkey = transport.get_remote_server_key()
+        except SSHException as e:
+            raise SessionBindError(
+                "cannot bind agent session: no remote server key"
+            ) from e
+        signature = self._prove_hostkey(hostkey)
+        msg = Message()
+        msg.add_byte(cSSH2_AGENT_EXTENSION)
+        msg.add_string(SESSION_BIND_EXTENSION)
+        msg.add_string(hostkey.asbytes())
+        msg.add_string(session_id)
+        msg.add_string(signature)
+        msg.add_boolean(self._is_forwarding)
+        return msg, hostkey
+
+    def _prove_hostkey(self, hostkey):
+        try:
+            response = self._transport.global_request(
+                HOSTKEYS_PROVE_REQUEST, [hostkey.asbytes()], wait=True
+            )
+        except SSHException as e:
+            raise SessionBindError("host key proof request failed") from e
+        if response is None:
+            raise SessionBindError(
+                "server does not support {}".format(HOSTKEYS_PROVE_REQUEST)
+            )
+        signature = response.get_binary()
+        if not signature:
+            raise SessionBindError("malformed host key proof from server")
+        return signature
 
 
 class AgentProxyThread(threading.Thread):
@@ -145,6 +310,11 @@ class AgentProxyThread(threading.Thread):
             ):
                 raise AuthenticationException("Unable to connect to SSH agent")
             self._communicate()
+        except SessionBindError:
+            # Strict session binding refused this connection; connect()
+            # already logged the reason and closed the channel, so there
+            # is simply nothing to proxy.
+            pass
         except:
             # XXX Not sure what to do here ... raise or pass ?
             raise
@@ -258,9 +428,11 @@ class AgentClientProxy:
     #. Communication occurs ...
     """
 
-    def __init__(self, chanRemote):
+    def __init__(self, chanRemote, binder=None, strict=False):
         self._conn = None
         self.__chanR = chanRemote
+        self._binder = binder
+        self._strict = strict
         self.thread = AgentRemoteProxy(self, chanRemote)
         self.thread.start()
 
@@ -275,6 +447,41 @@ class AgentClientProxy:
         if not conn:
             return
         self._conn = conn
+        if self._binder is None:
+            return
+        try:
+            self._binder.bind(self._conn)
+        except SessionBindError as e:
+            self._handle_bind_failure(e)
+
+    def _handle_bind_failure(self, error):
+        if self._strict:
+            # Strict mode: a failed bind must never degrade into an
+            # unconstrained agent session. Refuse the forwarded
+            # connection before any sign request can cross it.
+            _log.warning(
+                "Refusing forwarded agent connection: session binding "
+                "failed in strict mode (%s)",
+                error,
+            )
+            self._conn.close()
+            self._conn = None
+            try:
+                self.__chanR.close()
+            except Exception:
+                pass
+            raise error
+        # Lax mode: preserve the historical behavior and keep proxying
+        # without a session binding.
+        _log.debug(
+            "Proceeding with unbound forwarded agent connection (%s)",
+            error,
+        )
+        if isinstance(error, SessionBindConnectionLost):
+            # The agent dropped us for asking; reconnect before proxying
+            # (and do not retry the bind on the new connection).
+            self._conn.close()
+            self._conn = get_agent_connection()
 
     def close(self):
         """
@@ -349,6 +556,14 @@ class AgentServerProxy(AgentSSH):
         return self._file
 
 
+#: ``session_bind`` mode: never attempt ``session-bind@openssh.com``.
+SESSION_BIND_OFF = "off"
+#: ``session_bind`` mode: try to bind, keep old unbound behavior on failure.
+SESSION_BIND_LAX = "lax"
+#: ``session_bind`` mode: require binding; refuse the connection on failure.
+SESSION_BIND_STRICT = "strict"
+
+
 class AgentRequestHandler:
     """
     Primary/default implementation of SSH agent forwarding functionality.
@@ -371,14 +586,54 @@ class AgentRequestHandler:
         session.exec_command("git clone https://my.git.repository/")
     """
 
-    def __init__(self, chanClient):
+    def __init__(self, chanClient, session_bind=SESSION_BIND_LAX):
+        """
+        :param chanClient: the session channel to request forwarding on.
+        :param str session_bind:
+            how to handle the ``session-bind@openssh.com`` agent extension
+            for each forwarded connection:
+
+            - ``"lax"`` (default): attempt to bind every forwarded
+              connection to this session's host key and session ID, but
+              fall back to the historical unbound behavior when the
+              server or agent does not support the extension.
+            - ``"strict"``: require the binding to succeed; a forwarded
+              connection whose binding fails is refused before any sign
+              request can cross it, and never degrades into an
+              unconstrained request.
+            - ``"off"``: never attempt to bind (pure legacy behavior).
+        """
         self._conn = None
-        self.__chanC = chanClient
-        chanClient.request_forward_agent(self._forward_agent_handler)
         self.__clientProxys = []
+        if session_bind not in (
+            SESSION_BIND_OFF,
+            SESSION_BIND_LAX,
+            SESSION_BIND_STRICT,
+        ):
+            raise ValueError(
+                "session_bind must be one of 'off', 'lax', or 'strict'"
+            )
+        self.__chanC = chanClient
+        self._session_bind = session_bind
+        chanClient.request_forward_agent(self._forward_agent_handler)
 
     def _forward_agent_handler(self, chanRemote):
-        self.__clientProxys.append(AgentClientProxy(chanRemote))
+        if self._session_bind == SESSION_BIND_OFF:
+            self.__clientProxys.append(AgentClientProxy(chanRemote))
+            return
+        # A fresh binder per forwarded connection: each connection gets
+        # its own binding to this session, and nothing is reused across
+        # reconnects or transports.
+        binder = AgentSessionBinder(
+            self.__chanC.transport, is_forwarding=True
+        )
+        self.__clientProxys.append(
+            AgentClientProxy(
+                chanRemote,
+                binder=binder,
+                strict=self._session_bind == SESSION_BIND_STRICT,
+            )
+        )
 
     def __del__(self):
         self.close()
