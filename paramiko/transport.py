@@ -26,6 +26,7 @@ import socket
 import sys
 import threading
 import time
+from types import SimpleNamespace
 import weakref
 from hashlib import md5, sha1, sha256, sha512
 
@@ -490,6 +491,8 @@ class Transport(threading.Thread, ClosingContextManager):
         self.remote_version = ""
         self.local_cipher = self.remote_cipher = ""
         self.local_kex_init = self.remote_kex_init = None
+        self._agent_host_key = None
+        self._agent_handshake_signature = None
         self.local_mac = self.remote_mac = None
         self.local_compression = self.remote_compression = None
         self.session_id = None
@@ -884,6 +887,19 @@ class Transport(threading.Thread, ClosingContextManager):
         if (not self.active) or (not self.initial_kex_done):
             raise SSHException("No existing session")
         return self.host_key
+
+    def get_agent_session_binding(self):
+        """
+        Return initial handshake data used to bind a forwarded agent
+        connection to this SSH session.
+        """
+        if self.server_mode or not self.initial_kex_done:
+            return None
+        return SimpleNamespace(
+            host_key=self._agent_host_key,
+            session_id=self.session_id,
+            handshake_signature=self._agent_handshake_signature,
+        )
 
     def is_active(self):
         """
@@ -1863,6 +1879,9 @@ class Transport(threading.Thread, ClosingContextManager):
                     self.host_key_type
                 )
             )  # noqa
+        if not self.initial_kex_done:
+            self._agent_host_key = host_key
+            self._agent_handshake_signature = sig
         self.host_key = key
 
     def _add_K(self, m):

@@ -41,6 +41,11 @@ cSSH2_AGENTC_REQUEST_IDENTITIES = byte_chr(11)
 SSH2_AGENT_IDENTITIES_ANSWER = 12
 cSSH2_AGENTC_SIGN_REQUEST = byte_chr(13)
 SSH2_AGENT_SIGN_RESPONSE = 14
+SSH_AGENT_FAILURE = 5
+SSH_AGENT_SUCCESS = 6
+cSSH2_AGENTC_EXTENSION = byte_chr(27)
+SSH_AGENT_EXTENSION_FAILURE = 28
+SESSION_BIND_EXTENSION = "session-bind@openssh.com"
 
 SSH_AGENT_RSA_SHA2_256 = 2
 SSH_AGENT_RSA_SHA2_512 = 4
@@ -55,6 +60,44 @@ ALGORITHM_FLAG_MAP = {
 }
 for key, value in list(ALGORITHM_FLAG_MAP.items()):
     ALGORITHM_FLAG_MAP[f"{key}-cert-v01@openssh.com"] = value
+
+logger = get_logger(__name__)
+
+
+def _read_agent_message(conn):
+    data = conn.recv(4) or b""
+    while len(data) < 4:
+        if len(data) == 0:
+            raise SSHException("lost ssh-agent")
+        extra = conn.recv(4 - len(data)) or b""
+        if len(extra) == 0:
+            raise SSHException("lost ssh-agent")
+        data += extra
+    wanted = struct.unpack(">I", data)[0]
+    data = conn.recv(wanted) or b""
+    while len(data) < wanted:
+        if len(data) == 0:
+            raise SSHException("lost ssh-agent")
+        extra = conn.recv(wanted - len(data)) or b""
+        if len(extra) == 0:
+            raise SSHException("lost ssh-agent")
+        data += extra
+    msg = Message(data)
+    return ord(msg.get_byte()), msg
+
+
+def _write_agent_message(conn, msg):
+    msg = asbytes(msg)
+    conn.send(struct.pack(">I", len(msg)) + msg)
+
+
+def _write_agent_failure(conn):
+    response = Message()
+    response.add_byte(byte_chr(SSH_AGENT_FAILURE))
+    try:
+        _write_agent_message(conn, response)
+    except (OSError, AttributeError, struct.error):
+        pass
 
 
 # TODO (backwards incompat): rename all these - including making some of their
@@ -102,11 +145,8 @@ class AgentSSH:
         self._keys = ()
 
     def _send_message(self, msg):
-        msg = asbytes(msg)
-        self._conn.send(struct.pack(">I", len(msg)) + msg)
-        data = self._read_all(4)
-        msg = Message(self._read_all(struct.unpack(">I", data)[0]))
-        return ord(msg.get_byte()), msg
+        _write_agent_message(self._conn, msg)
+        return _read_agent_message(self._conn)
 
     def _read_all(self, wanted):
         result = self._conn.recv(wanted)
@@ -139,11 +179,27 @@ class AgentProxyThread(threading.Thread):
             # The address should be an IP address as a string? or None
             self.__addr = addr
             self._agent.connect()
-            if not isinstance(self._agent, int) and (
+            no_agent = not isinstance(self._agent, int) and (
                 self._agent._conn is None
-                or not hasattr(self._agent._conn, "fileno")
-            ):
-                raise AuthenticationException("Unable to connect to SSH agent")
+                or not hasattr(self._agent._conn, "fileno")  # noqa: W503
+            )
+            if no_agent:
+                unavailable = getattr(
+                    self._agent,
+                    "handle_unavailable_agent_connection",
+                    None,
+                )
+                if unavailable is not None:
+                    if not unavailable(self.__inr):
+                        return
+                else:
+                    raise AuthenticationException(
+                        "Unable to connect to SSH agent"
+                    )
+            prepare = getattr(self._agent, "prepare_session_bind", None)
+            if prepare is not None and not prepare(self.__inr):
+                self._exit = True
+                return
             self._communicate()
         except:
             # XXX Not sure what to do here ... raise or pass ?
@@ -155,7 +211,13 @@ class AgentProxyThread(threading.Thread):
         oldflags = fcntl.fcntl(self.__inr, fcntl.F_GETFL)
         fcntl.fcntl(self.__inr, fcntl.F_SETFL, oldflags | os.O_NONBLOCK)
         while not self._exit:
-            events = select([self._agent._conn, self.__inr], [], [], 0.5)
+            try:
+                events = select(
+                    [self._agent._conn, self.__inr], [], [], 0.5
+                )
+            except OSError:
+                self._close()
+                break
             for fd in events[0]:
                 if self._agent._conn == fd:
                     data = self._agent._conn.recv(512)
@@ -175,8 +237,14 @@ class AgentProxyThread(threading.Thread):
 
     def _close(self):
         self._exit = True
-        self.__inr.close()
-        self._agent._conn.close()
+        try:
+            self.__inr.close()
+        except OSError:
+            pass
+        try:
+            self._agent._conn.close()
+        except OSError:
+            pass
 
 
 class AgentLocalProxy(AgentProxyThread):
@@ -215,6 +283,95 @@ class AgentRemoteProxy(AgentProxyThread):
 
     def get_connection(self):
         return self.__chan, None
+
+
+class AgentSessionBinder:
+    def __init__(self, transport, channel, strict):
+        self.transport = transport
+        self.channel = channel
+        self.strict = strict
+
+    def prepare(self, agent_connection):
+        binding = None
+        if self.transport is not None:
+            getter = getattr(self.transport, "get_agent_session_binding", None)
+            if getter is not None:
+                binding = getter()
+        if binding is None or None in (
+            binding.host_key,
+            binding.session_id,
+            binding.handshake_signature,
+        ):
+            if self.strict:
+                logger.log(
+                    DEBUG,
+                    "Forwarded agent session binding unavailable; closing "
+                    "forwarded channel %s",
+                    self._channel_id(),
+                )
+                self._reject_to_remote()
+                agent_connection.close()
+                self._close_remote()
+                return False
+            return "ignored"
+
+        request = Message()
+        request.add_byte(cSSH2_AGENTC_EXTENSION)
+        request.add_string(SESSION_BIND_EXTENSION)
+        request.add_string(binding.host_key)
+        request.add_string(binding.session_id)
+        request.add_string(binding.handshake_signature)
+        try:
+            _write_agent_message(agent_connection, request)
+            ptype, _ = _read_agent_message(agent_connection)
+        except (OSError, EOFError, SSHException, struct.error):
+            result = "disconnected"
+            if self.strict:
+                self._reject_to_remote()
+                agent_connection.close()
+                self._close_remote()
+                status = "rejected"
+            else:
+                agent_connection.close()
+                status = "disconnected"
+        else:
+            if ptype == SSH_AGENT_SUCCESS:
+                result = "succeeded"
+                status = "bound"
+            else:
+                result = "rejected"
+                if self.strict:
+                    self._reject_to_remote()
+                    agent_connection.close()
+                    self._close_remote()
+                    status = "rejected"
+                else:
+                    result = "unsupported"
+                    status = "ignored"
+
+        logger.log(
+            DEBUG,
+            "Forwarded agent session binding %s on channel %s",
+            result,
+            self._channel_id(),
+        )
+        return status != "rejected"
+
+    def _channel_id(self):
+        if self.channel is None:
+            return "?"
+        getter = getattr(self.channel, "get_id", None)
+        if getter is not None:
+            return getter()
+        return getattr(self.channel, "chanid", "?")
+
+    def _close_remote(self):
+        closer = getattr(self.channel, "close", None)
+        if closer is not None:
+            closer()
+
+    def _reject_to_remote(self):
+        _write_agent_failure(self.channel)
 
 
 def get_agent_connection():
@@ -258,9 +415,17 @@ class AgentClientProxy:
     #. Communication occurs ...
     """
 
-    def __init__(self, chanRemote):
+    def __init__(self, chanRemote, strict_session_bind=False):
+        """
+        Proxy one forwarded agent connection.
+
+        :param bool strict_session_bind:
+            require the local agent to accept session binding before any
+            forwarded request is passed to it
+        """
         self._conn = None
         self.__chanR = chanRemote
+        self._strict_session_bind = strict_session_bind
         self.thread = AgentRemoteProxy(self, chanRemote)
         self.thread.start()
 
@@ -276,6 +441,35 @@ class AgentClientProxy:
             return
         self._conn = conn
 
+    def handle_unavailable_agent_connection(self, channel):
+        if self._strict_session_bind:
+            logger.log(
+                DEBUG,
+                "Forwarded agent unavailable; closing forwarded channel %s",
+                getattr(channel, "chanid", "?"),
+            )
+            _write_agent_failure(channel)
+            channel.close()
+            return False
+        return True
+
+    def prepare_session_bind(self, channel):
+        transport = getattr(channel, "get_transport", lambda: None)()
+        binder = AgentSessionBinder(
+            transport=transport,
+            channel=channel,
+            strict=self._strict_session_bind,
+        )
+        if binder.prepare(self._conn):
+            return True
+        if self._strict_session_bind:
+            return False
+        conn = get_agent_connection()
+        if conn is not None:
+            self._conn = conn
+            return True
+        return False
+
     def close(self):
         """
         Close the current connection and terminate the agent
@@ -283,7 +477,7 @@ class AgentClientProxy:
         """
         if hasattr(self, "thread"):
             self.thread._exit = True
-            self.thread.join(1000)
+            self.thread.join(0.1)
         if self._conn is not None:
             self._conn.close()
 
@@ -333,7 +527,7 @@ class AgentServerProxy(AgentSSH):
         os.remove(self._file)
         os.rmdir(self._dir)
         self.thread._exit = True
-        self.thread.join(1000)
+        self.thread.join(0.1)
         self._close()
 
     def get_env(self):
@@ -371,14 +565,27 @@ class AgentRequestHandler:
         session.exec_command("git clone https://my.git.repository/")
     """
 
-    def __init__(self, chanClient):
+    def __init__(self, chanClient, strict_session_bind=False):
+        """
+        Forward the local SSH agent over an existing SSH channel.
+
+        :param bool strict_session_bind:
+            require the local agent to bind every forwarded connection to the
+            current SSH session before signature requests may cross it
+        """
         self._conn = None
         self.__chanC = chanClient
         chanClient.request_forward_agent(self._forward_agent_handler)
         self.__clientProxys = []
+        self._strict_session_bind = strict_session_bind
 
     def _forward_agent_handler(self, chanRemote):
-        self.__clientProxys.append(AgentClientProxy(chanRemote))
+        self.__clientProxys.append(
+            AgentClientProxy(
+                chanRemote,
+                strict_session_bind=self._strict_session_bind,
+            )
+        )
 
     def __del__(self):
         self.close()

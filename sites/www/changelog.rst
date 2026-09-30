@@ -2,6 +2,13 @@
 Changelog
 =========
 
+- :feature:`-` Add optional ``session-bind@openssh.com`` support to SSH agent
+  forwarding. `AgentRequestHandler <paramiko.agent.AgentRequestHandler>` now
+  accepts ``strict_session_bind=True`` to require successful destination
+  session binding before any forwarded agent request, including signatures;
+  agents that do not support the extension continue to work in the default
+  lenient/legacy mode.
+
 - :feature:`-` Added support for the ``mlkem768x25519-sha256`` post-quantum
   hybrid key exchange method described in
   ``draft-ietf-sshm-mlkem-hybrid-kex``. It pairs ML-KEM-768 (FIPS 203) with
