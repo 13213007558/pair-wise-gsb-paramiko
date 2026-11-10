@@ -28,6 +28,7 @@ from paramiko import (
     SourceResult,
     SSHException,
 )
+from paramiko.ssh_exception import PartialAuthentication
 
 from ._util import (
     _support,
@@ -426,6 +427,9 @@ class AuthStrategy_:
         def requires_and_uses_transport_with_methods_returning_result(self):
             with raises(TypeError):
                 self.strat.authenticate()
+            # Transport auth methods signal real success with an empty
+            # "remaining methods" list, not merely by not raising.
+            self.source.authenticate.return_value = []
             result = self.strat.authenticate(self.transport)
             self.strat.get_sources.assert_called_once_with()
             self.source.authenticate.assert_called_once_with(self.transport)
@@ -461,6 +465,7 @@ class AuthStrategy_:
 
         def short_circuits_on_successful_auth(self):
             kaboom = Mock(authenticate=Mock(side_effect=Exception("onoz")))
+            self.source.authenticate.return_value = []
             self.strat.get_sources.return_value = [self.source, kaboom]
             result = self.strat.authenticate(self.transport)
             # No exception, and it's just a regular ol Result
@@ -468,3 +473,43 @@ class AuthStrategy_:
             # And it did not capture any attempt to execute the 2nd source
             assert len(result) == 1
             assert result[0].source is self.source
+            kaboom.authenticate.assert_not_called()
+
+        def nonempty_result_list_is_partial_not_success(self):
+            # Not raising is not enough: a non-empty "remaining methods" list
+            # means the factor was only partially accepted.
+            self.source.authenticate.return_value = ["password"]
+            with raises(AuthFailure) as info:
+                self.strat.authenticate(self.transport)
+            assert info.value.result[0].result == ["password"]
+
+        def partial_authentication_continues_with_next_source(self):
+            partial = Mock()
+            partial.authenticate.side_effect = PartialAuthentication(
+                ["password"]
+            )
+            final = Mock()
+            final.authenticate.return_value = []
+            self.strat.get_sources.return_value = [partial, final]
+            result = self.strat.authenticate(self.transport)
+            assert len(result) == 2
+            assert result[0].result == ["password"]
+            assert result[1].result == []
+            final.authenticate.assert_called_once_with(self.transport)
+
+        def does_not_touch_sources_after_real_success(self):
+            partial = Mock()
+            partial.authenticate.side_effect = PartialAuthentication(
+                ["password"]
+            )
+            final = Mock()
+            final.authenticate.return_value = []
+            after = Mock(
+                authenticate=Mock(
+                    side_effect=AssertionError("should never run")
+                )
+            )
+            self.strat.get_sources.return_value = [partial, final, after]
+            result = self.strat.authenticate(self.transport)
+            assert len(result) == 2
+            after.authenticate.assert_not_called()

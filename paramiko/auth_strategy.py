@@ -8,7 +8,10 @@ Replaces certain parts of `.SSHClient`. For a concrete implementation, see the
 from collections import namedtuple
 
 from .agent import AgentKey
-from .ssh_exception import AuthenticationException
+from .ssh_exception import (
+    AuthenticationException,
+    PartialAuthentication,
+)
 from .util import get_logger
 
 
@@ -263,11 +266,27 @@ class AuthStrategy:
         """
         Handles attempting `AuthSource` instances yielded from `get_sources`.
 
+        Each source ends in exactly one of three states:
+
+        - **failure**: its `AuthSource.authenticate` raised something (recorded
+          as the exception in the `AuthResult`);
+        - **partial success**: the server accepted the factor but asked for
+          more, signalled by `.PartialAuthentication` (or, equivalently, a
+          non-empty list of remaining auth methods). This is *not* a completed
+          login, so iteration continues with the next source;
+        - **real success**: the underlying `.Transport` auth method returned
+          its documented empty "no remaining methods" list (meaning the server
+          sent MSG_USERAUTH_SUCCESS and the transport is now authenticated).
+          Only then do we stop and return.
+
         You *normally* won't need to override this, but it's an option for
         advanced users.
         """
-        succeeded = False
         overall_result = AuthResult(strategy=self)
+        # Local-only bookkeeping: nothing here is stored on self, so a prior
+        # call's partial or successful state can never bleed into a new attempt
+        # against a fresh (or reset) transport.
+        succeeded = False
         # TODO: arguably we could fit in a "send none auth, record allowed auth
         # types sent back" thing here as OpenSSH-client does, but that likely
         # wants to live in fabric.OpenSSHAuthStrategy as not all target servers
@@ -275,13 +294,18 @@ class AuthStrategy:
         # TODO: needs better "server told us too many attempts" checking!
         for source in self.get_sources():
             self.log.debug(f"Trying {source}")
-            try:  # NOTE: this really wants to _only_ wrap the authenticate()!
+            # NOTE: this really wants to _only_ wrap the authenticate()!
+            try:
                 result = source.authenticate(transport)
-                succeeded = True
-            # TODO: 'except PartialAuthentication' is needed for 2FA and
-            # similar, as per old SSHClient.connect - it is the only way
-            # AuthHandler supplies access to the 'name-list' field from
-            # MSG_USERAUTH_FAILURE, at present.
+            except PartialAuthentication as e:
+                # Server accepted this factor but still wants another one. Do
+                # NOT mark this as success: record the remaining methods and
+                # keep working through the remaining sources.
+                result = e.allowed_types
+                self.log.info(
+                    f"Authentication via {source} partially accepted; "
+                    f"remaining methods: {result}"
+                )
             except Exception as e:
                 result = e
                 # TODO: look at what this could possibly raise, we don't really
@@ -295,10 +319,18 @@ class AuthStrategy:
                     f"Authentication via {source} failed with {source_class}"
                 )
             overall_result.append(SourceResult(source, result))
-            if succeeded:
+            # Transport auth methods contract: an empty list means the server
+            # sent MSG_USERAUTH_SUCCESS and the transport is authenticated; a
+            # non-empty list means "factor accepted, try one of these next".
+            # Merely not raising is therefore not proof of a completed login.
+            if isinstance(result, list) and not result:
+                succeeded = True
+                # Don't touch any further sources: their credentials must not
+                # be fetched or tried once login has completed.
                 break
         # Gotta die here if nothing worked, otherwise Transport's main loop
-        # just kinda hangs out until something times out!
+        # just kinda hangs out until something times out! The AuthResult keeps
+        # the full record (exceptions *and* partial successes) for debugging.
         if not succeeded:
             raise AuthFailure(result=overall_result)
         # Success: give back what was done, in case they care.
