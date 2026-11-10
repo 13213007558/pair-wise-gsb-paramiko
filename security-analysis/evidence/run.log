@@ -1,0 +1,116 @@
+# Evidence run: all side effects below are stubs; nothing really runs
+# python: 3.12.11 | paramiko baseline 5.1.0
+
+=== CASE 1  parse() only, no lookup (config 01, Match exec present) ===
+  [OPEN ] open('/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/workspace/security-analysis/configs/01-match-exec.conf')
+
+=== CASE 2  lookup() normal match, exec succeeds (config 01) ===
+  result.user      = match-exec-user
+  result.hostname  = execed.example.test
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [DNS  ] getfqdn('')
+  [EXEC ] probe-exec --stage first --host plain-anything
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [DNS  ] getfqdn('')
+  [EXEC ] probe-exec --stage first --host plain-anything
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+
+=== CASE 3  lookup() with exec returning non-zero (condition false) ===
+  result.user      = None (absent => stanza skipped)
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [DNS  ] getfqdn('')
+  [EXEC ] probe-exec --fail
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [DNS  ] getfqdn('')
+  [EXEC ] probe-exec --fail
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+
+=== CASE 4  lookup() called twice on one parsed config (config 01) ===
+  user values: match-exec-user / match-exec-user
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [DNS  ] getfqdn('')
+  [EXEC ] probe-exec --stage first --host plain-anything
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [DNS  ] getfqdn('')
+  [EXEC ] probe-exec --stage first --host plain-anything
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [DNS  ] getfqdn('')
+  [EXEC ] probe-exec --stage first --host plain-anything
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [DNS  ] getfqdn('')
+  [EXEC ] probe-exec --stage first --host plain-anything
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+
+=== CASE 5  canonicalized re-match: DNS queries and both exec passes (02) ===
+  result.hostname  = www.corp.test
+  result.user      = first-pass-user
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [DNS  ] getfqdn('')
+  [EXEC ] probe-exec --stage pass1 --host www
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [DNS  ] getfqdn('')
+  [EXEC ] probe-exec --stage pass2 --host www
+  [DNS  ] gethostbyname('www.lab.test')
+  [DNS  ] gethostbyname('www.corp.test')
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [DNS  ] getfqdn('')
+  [EXEC ] probe-exec --stage pass1 --host www.corp.test
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [DNS  ] getfqdn('')
+  [EXEC ] probe-exec --stage pass2 --host www.corp.test
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+
+=== CASE 5b canonicalization fails DNS, fallback local (config 02) ===
+  result.hostname  = www
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [DNS  ] getfqdn('')
+  [EXEC ] probe-exec --stage pass1 --host www
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [DNS  ] getfqdn('')
+  [EXEC ] probe-exec --stage pass2 --host www
+  [DNS  ] gethostbyname('www.lab.test')
+  [DNS  ] gethostbyname('www.corp.test')
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [DNS  ] getfqdn('')
+  [EXEC ] probe-exec --stage pass1 --host www
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [DNS  ] getfqdn('')
+  [EXEC ] probe-exec --stage pass2 --host www
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+
+=== CASE 6  placeholder expansion at lookup; ProxyCommand only at Popen (03) ===
+  result.hostname      = gw.internal.example.test
+  result.proxycommand  = /opt/sentinel/proxy-sentinel --host gw.internal.example.test --port 2222 --user deploy --home /Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home --n %n
+  result.identityfile  = ['/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home/.ssh/sentinel_gw.internal.example.test.key']
+  -- after lookup, before ProxyCommand():
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [DNS  ] getfqdn('')
+  -- after ProxyCommand() construction:
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [DNS  ] getfqdn('')
+  [SPAWN] /opt/sentinel/proxy-sentinel --host gw.internal.example.test --port 2222 --user deploy --home /Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home --n %n
+
+=== CASE 7  ProxyCommand none is None, construction skipped (config 04) ===
+  proxycommand(no-proxy)    = None
+  proxycommand(with-proxy)  = /opt/sentinel/proxy-sentinel --mode default
+  skipping ProxyCommand(None): no process requested
+  [OPEN ] open('/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/workspace/security-analysis/configs/04-proxy-none.conf')
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [SPAWN] /opt/sentinel/proxy-sentinel --mode default
+
+=== CASE 8  %%l token causes local FQDN DNS lookups during lookup (05) ===
+  result.user = fqdn-user
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [DNS  ] getfqdn('')
+  [EXEC ] probe-exec --fqdn stub-host.lab.test --short swappleMBP --home /Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'
+  [DNS  ] getfqdn('')
+  [EXEC ] probe-exec --fqdn stub-host.lab.test --short swappleMBP --home /Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home
+  [OPEN ] expanduser('~') -> '/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261110-SEC3-004/attempt-001/claude-home'

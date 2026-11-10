@@ -1,0 +1,5 @@
+1) after lookup, spawns = []
+2) after explicit ProxyCommand(), spawns = [['sentinel', '--host', 'real-target.test']]
+3) transport received our proxy object: True
+   getaddrinfo called: False | socket() called: False
+4) total spawns: 1 - connect() added zero; config is never consulted there.
