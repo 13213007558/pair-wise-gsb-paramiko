@@ -1,0 +1,16 @@
+asttokens==3.0.2
+bcrypt==5.0.0
+cffi==2.1.1
+colorama==0.4.6
+cryptography==50.0.2
+executing==2.3.0
+icecream==2.2.0
+iniconfig==2.3.1
+invoke==3.0.3
+packaging==26.3
+pluggy==1.7.0
+pycparser==3.12
+pygments==2.21.0
+pynacl==1.6.2
+pytest==9.2.0
+pytest-mock==3.17.0
