@@ -120,6 +120,12 @@ class SFTPServerInterface:
         not normally present in ``os.stat`` results.  The method
         `.SFTPAttributes.from_stat` will usually do what you want.
 
+        Alternatively, a trusted server may return an `.SFTPHandle` whose
+        directory listing has been cached with `.SFTPHandle._set_files`;
+        such a handle may additionally be limited with `.SFTPHandle.allow`
+        (for example to ``SFTPHandle.READDIR``) and is registered in the
+        server's folder handle table.
+
         In case of an error, you should return one of the ``SFTP_*`` error
         codes, such as ``SFTP_PERMISSION_DENIED``.
 
@@ -127,7 +133,7 @@ class SFTPServerInterface:
             listed.
         :return:
             a list of the files in the given folder, using `.SFTPAttributes`
-            objects.
+            objects, or a capability-limited `.SFTPHandle`.
 
         .. note::
             You should normalize the given ``path`` first (see the `os.path`

@@ -74,6 +74,15 @@ from paramiko.sftp_client import SFTP, SFTPClient
 from paramiko.sftp_server import SFTPServer
 from paramiko.sftp_attr import SFTPAttributes
 from paramiko.sftp_handle import SFTPHandle
+from paramiko.sftp_handle import (
+    HANDLE_ALL,
+    HANDLE_CHECK_FILE,
+    HANDLE_FSTAT,
+    HANDLE_FSETSTAT,
+    HANDLE_READ,
+    HANDLE_READDIR,
+    HANDLE_WRITE,
+)
 from paramiko.sftp_si import SFTPServerInterface
 from paramiko.sftp_file import SFTPFile
 from paramiko.message import Message

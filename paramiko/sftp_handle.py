@@ -25,6 +25,30 @@ from paramiko.sftp import SFTP_OP_UNSUPPORTED, SFTP_OK
 from paramiko.util import ClosingContextManager
 
 
+#: Handle may be used with ``read`` (``CMD_READ``).
+HANDLE_READ = 0x01
+#: Handle may be used with ``write`` (``CMD_WRITE``).
+HANDLE_WRITE = 0x02
+#: Handle may be used with ``stat`` (``CMD_FSTAT``).
+HANDLE_FSTAT = 0x04
+#: Handle may be used with ``chattr`` (``CMD_FSETSTAT``).
+HANDLE_FSETSTAT = 0x08
+#: A folder handle may be iterated with ``readdir`` (``CMD_READDIR``).
+HANDLE_READDIR = 0x10
+#: Handle may be used by the built-in ``check-file`` extended request.
+HANDLE_CHECK_FILE = 0x20
+
+#: Every operation a handle may be granted.
+HANDLE_ALL = (
+    HANDLE_READ
+    | HANDLE_WRITE
+    | HANDLE_FSTAT
+    | HANDLE_FSETSTAT
+    | HANDLE_READDIR
+    | HANDLE_CHECK_FILE
+)
+
+
 class SFTPHandle(ClosingContextManager):
     """
     Abstract object representing a handle to an open file (or folder) in an
@@ -35,7 +59,24 @@ class SFTPHandle(ClosingContextManager):
     features of a file handle, like `stat` or `chattr`.
 
     Instances of this class may be used as context managers.
+
+    .. versionadded:: 5.2
+        Trusted servers may optionally limit the operations a client may
+        perform through a handle via `allow`, `deny`, and `allows`.  When no
+        limit is configured, every operation is permitted exactly as in
+        earlier versions, so existing `.SFTPServerInterface` subclasses remain
+        compatible.
     """
+
+    # operation capabilities documented on the class, so they are discoverable
+    # as ``SFTPHandle.READ`` etc.
+    READ = HANDLE_READ
+    WRITE = HANDLE_WRITE
+    FSTAT = HANDLE_FSTAT
+    FSETSTAT = HANDLE_FSETSTAT
+    READDIR = HANDLE_READDIR
+    CHECK_FILE = HANDLE_CHECK_FILE
+    ALL = HANDLE_ALL
 
     def __init__(self, flags=0):
         """
@@ -51,6 +92,58 @@ class SFTPHandle(ClosingContextManager):
         # only for handles to folders:
         self.__files = {}
         self.__tell = None
+        # ``None`` means the optional capability mechanism is not enabled and
+        # every operation is allowed (the historical behavior).
+        self.__allowed = None
+
+    def allow(self, allowed):
+        """
+        Limit this handle to the given set of capabilities.
+
+        The argument is a bitmask of the capability constants (``READ``,
+        ``WRITE``, ``FSTAT``, ``FSETSTAT``, ``READDIR`` and/or
+        ``CHECK_FILE``), or one of the convenience groups ``ALL``.  Once a
+        limit has been set, only operations whose capability is included are
+        accepted; the flags requested by the client when opening the file can
+        never widen this server-approved scope.
+
+        Subsequent calls replace the previous limit rather than adding to it.
+
+        :param int allowed: bitmask of allowed capabilities.
+        :return: this handle, so calls can be chained.
+        :rtype: `.SFTPHandle`
+        """
+        self.__allowed = allowed & HANDLE_ALL
+        return self
+
+    def deny(self, denied):
+        """
+        Remove the given capabilities from those allowed on this handle.
+
+        If no limit has been configured yet, every capability is treated as
+        initially allowed, so this is equivalent to allowing
+        ``SFTPHandle.ALL`` minus ``denied``.
+
+        :param int denied: bitmask of capabilities to revoke.
+        :return: this handle, so calls can be chained.
+        :rtype: `.SFTPHandle`
+        """
+        if self.__allowed is None:
+            self.__allowed = HANDLE_ALL
+        self.__allowed &= ~denied
+        return self
+
+    def allows(self, capability):
+        """
+        Return ``True`` if ``capability`` (one of the capability constants) is
+        permitted on this handle.
+
+        Handles without a configured limit allow every capability so that
+        servers which never opt into the mechanism keep their old behavior.
+        """
+        if self.__allowed is None:
+            return True
+        return bool(self.__allowed & capability & HANDLE_ALL)
 
     def close(self):
         """

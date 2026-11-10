@@ -2,6 +2,19 @@
 Changelog
 =========
 
+- :feature:`-` Server-mode SFTP gained an optional, handle-scoped
+  authorization mechanism. Trusted `.SFTPServerInterface` implementations can
+  now limit the operations permitted through each `.SFTPHandle` (file or
+  directory) via `.SFTPHandle.allow`, `.SFTPHandle.deny`, and
+  `.SFTPHandle.allows`, using the new ``HANDLE_READ``, ``HANDLE_WRITE``,
+  ``HANDLE_FSTAT``, ``HANDLE_FSETSTAT``, ``HANDLE_READDIR`` and
+  ``HANDLE_CHECK_FILE`` capability constants. Enforcement happens in
+  `.SFTPServer` before any business callback or file modification, the flags
+  a client sends at open time can never widen the server-approved scope, and
+  a closed (or re-issued, renamed, or cross-connection) handle never inherits
+  a previous grant. Servers that never configure a limit keep the historical
+  behavior, and handle close/teardown no longer leaks underlying objects when
+  a backend ``close()`` raises.
 - :release:`5.1.0 <2026-10-17>`
 - :release:`5.0.1 <2026-10-17>`
 - :bug:`2462` (w/ earlier fix attempts :issue:`2475` and :issue:`2465`) An API

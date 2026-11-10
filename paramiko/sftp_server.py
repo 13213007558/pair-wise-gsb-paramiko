@@ -163,13 +163,20 @@ class SFTPServer(BaseSFTP, SubsystemHandler):
         self.server.session_ended()
         super().finish_subsystem()
         # close any file handles that were left open
-        # (so we can return them to the OS quickly)
-        for f in self.file_table.values():
-            f.close()
-        for f in self.folder_table.values():
-            f.close()
+        # (so we can return them to the OS quickly).  detach the tables first
+        # and swallow per-handle errors so one broken close() cannot leak the
+        # remaining underlying objects.
+        file_table = self.file_table
+        folder_table = self.folder_table
         self.file_table = {}
         self.folder_table = {}
+        for table in (file_table, folder_table):
+            for handle in list(table.values()):
+                try:
+                    handle.close()
+                except Exception as e:
+                    self._log(DEBUG, "Exception closing handle: " + str(e))
+                    self._log(DEBUG, util.tb_strings())
 
     @staticmethod
     def convert_errno(e):
@@ -261,8 +268,43 @@ class SFTPServer(BaseSFTP, SubsystemHandler):
         # (but don't mind it being blank)
         self._response(request_number, CMD_STATUS, code, desc, "")
 
+    def _deny(self, request_number, handle, capability):
+        """
+        Enforce a handle's server-approved scope.
+
+        Returns ``True`` (after sending a permission-denied status) when the
+        handle does not permit ``capability``.  The check runs before any
+        business callback, so a rejection can never trigger a backend
+        modification.  Handles without a configured limit always pass.
+        """
+        if not handle.allows(capability):
+            self._send_status(request_number, SFTP_PERMISSION_DENIED)
+            return True
+        return False
+
+    def _lookup_file_handle(self, request_number, handle):
+        """
+        Resolve a file handle for a file-oriented request.
+
+        Directory and unknown handles are rejected with a bad-message
+        status before any callback runs.  Capability enforcement is left to
+        the caller via `_deny`.  Returns the `.SFTPHandle`, or ``None`` when
+        a status response has already been sent.
+        """
+        if handle not in self.file_table:
+            self._send_status(
+                request_number, SFTP_BAD_MESSAGE, "Invalid handle"
+            )
+            return None
+        return self.file_table[handle]
+
     def _open_folder(self, request_number, path):
         resp = self.server.list_folder(path)
+        if issubclass(type(resp), SFTPHandle):
+            # a trusted server may return a pre-built, capability-limited
+            # folder handle instead of a plain listing
+            self._send_handle_response(request_number, resp, True)
+            return
         if issubclass(type(resp), list):
             # got an actual list of filenames in the folder
             folder = SFTPHandle()
@@ -302,6 +344,12 @@ class SFTPServer(BaseSFTP, SubsystemHandler):
             )
             return
         f = self.file_table[handle]
+        # this extension reads file contents, so require both the extension
+        # capability and plain read access before touching the backend
+        if self._deny(request_number, f, HANDLE_CHECK_FILE):
+            return
+        if self._deny(request_number, f, HANDLE_READ):
+            return
         for x in alg_list:
             # TODO: this only contains sha1 and md5 so uh, is this extension
             # actually supported anymore? do we need to update the map for
@@ -386,12 +434,34 @@ class SFTPServer(BaseSFTP, SubsystemHandler):
         elif t == CMD_CLOSE:
             handle = msg.get_binary()
             if handle in self.folder_table:
-                del self.folder_table[handle]
+                folder = self.folder_table.pop(handle)
+                try:
+                    folder.close()
+                except Exception as e:
+                    # the handle is already detached; keep the underlying
+                    # error from tearing down the whole SFTP session
+                    self._log(
+                        DEBUG, "Exception closing folder handle: " + str(e)
+                    )
+                    self._log(DEBUG, util.tb_strings())
+                finally:
+                    # a broken close() must not leave a stale handle behind
+                    self.folder_table.pop(handle, None)
                 self._send_status(request_number, SFTP_OK)
                 return
             if handle in self.file_table:
-                self.file_table[handle].close()
-                del self.file_table[handle]
+                f = self.file_table.pop(handle)
+                try:
+                    f.close()
+                except Exception as e:
+                    self._log(
+                        DEBUG, "Exception closing file handle: " + str(e)
+                    )
+                    self._log(DEBUG, util.tb_strings())
+                finally:
+                    # make sure a close() failure never leaks the handle, so
+                    # the same bytes can never regain authorization later
+                    self.file_table.pop(handle, None)
                 self._send_status(request_number, SFTP_OK)
                 return
             self._send_status(
@@ -401,12 +471,12 @@ class SFTPServer(BaseSFTP, SubsystemHandler):
             handle = msg.get_binary()
             offset = msg.get_int64()
             length = msg.get_int()
-            if handle not in self.file_table:
-                self._send_status(
-                    request_number, SFTP_BAD_MESSAGE, "Invalid handle"
-                )
+            f = self._lookup_file_handle(request_number, handle)
+            if f is None:
                 return
-            data = self.file_table[handle].read(offset, length)
+            if self._deny(request_number, f, HANDLE_READ):
+                return
+            data = f.read(offset, length)
             if isinstance(data, (bytes, str)):
                 if len(data) == 0:
                     self._send_status(request_number, SFTP_EOF)
@@ -418,14 +488,12 @@ class SFTPServer(BaseSFTP, SubsystemHandler):
             handle = msg.get_binary()
             offset = msg.get_int64()
             data = msg.get_binary()
-            if handle not in self.file_table:
-                self._send_status(
-                    request_number, SFTP_BAD_MESSAGE, "Invalid handle"
-                )
+            f = self._lookup_file_handle(request_number, handle)
+            if f is None:
                 return
-            self._send_status(
-                request_number, self.file_table[handle].write(offset, data)
-            )
+            if self._deny(request_number, f, HANDLE_WRITE):
+                return
+            self._send_status(request_number, f.write(offset, data))
         elif t == CMD_REMOVE:
             path = msg.get_text()
             self._send_status(request_number, self.server.remove(path))
@@ -454,6 +522,8 @@ class SFTPServer(BaseSFTP, SubsystemHandler):
                 )
                 return
             folder = self.folder_table[handle]
+            if self._deny(request_number, folder, HANDLE_READDIR):
+                return
             self._read_folder(request_number, folder)
         elif t == CMD_STAT:
             path = msg.get_text()
@@ -471,12 +541,12 @@ class SFTPServer(BaseSFTP, SubsystemHandler):
                 self._send_status(request_number, resp)
         elif t == CMD_FSTAT:
             handle = msg.get_binary()
-            if handle not in self.file_table:
-                self._send_status(
-                    request_number, SFTP_BAD_MESSAGE, "Invalid handle"
-                )
+            f = self._lookup_file_handle(request_number, handle)
+            if f is None:
                 return
-            resp = self.file_table[handle].stat()
+            if self._deny(request_number, f, HANDLE_FSTAT):
+                return
+            resp = f.stat()
             if issubclass(type(resp), SFTPAttributes):
                 self._response(request_number, CMD_ATTRS, resp)
             else:
@@ -488,14 +558,12 @@ class SFTPServer(BaseSFTP, SubsystemHandler):
         elif t == CMD_FSETSTAT:
             handle = msg.get_binary()
             attr = SFTPAttributes._from_msg(msg)
-            if handle not in self.file_table:
-                self._response(
-                    request_number, SFTP_BAD_MESSAGE, "Invalid handle"
-                )
+            f = self._lookup_file_handle(request_number, handle)
+            if f is None:
                 return
-            self._send_status(
-                request_number, self.file_table[handle].chattr(attr)
-            )
+            if self._deny(request_number, f, HANDLE_FSETSTAT):
+                return
+            self._send_status(request_number, f.chattr(attr))
         elif t == CMD_READLINK:
             path = msg.get_text()
             resp = self.server.readlink(path)
@@ -536,3 +604,11 @@ class SFTPServer(BaseSFTP, SubsystemHandler):
 
 
 from paramiko.sftp_handle import SFTPHandle
+from paramiko.sftp_handle import (
+    HANDLE_CHECK_FILE,
+    HANDLE_FSTAT,
+    HANDLE_FSETSTAT,
+    HANDLE_READ,
+    HANDLE_READDIR,
+    HANDLE_WRITE,
+)
