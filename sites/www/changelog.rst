@@ -2,6 +2,23 @@
 Changelog
 =========
 
+- :feature:`-` Added explicit, opt-in OpenSSH **host certificate**
+  verification. A new `.HostCertificateVerifier` (handed to
+  `.SSHClient.connect` via ``host_certificate_verifier``) trusts one or more
+  `.HostCertificateAuthority` objects, each pairing a CA public key with the
+  host name range (and optional port) it may vouch for. Every connection is
+  then required to present a host certificate that is of host type, names the
+  connected host as a principal, is within its validity window, carries no
+  unrecognized critical options, and is signed by an in-scope trusted CA.
+  Failures raise distinct `.HostCertificateError` subclasses
+  (`.HostCertificateTrustError`, `.HostCertificateNameError`,
+  `.HostCertificateValidityError`, `.HostCertificateSignatureError`) and
+  always occur before any user authentication material is sent. The classic
+  bare-key ``known_hosts`` workflow is unchanged, and user certificates used
+  for client authentication never establish host trust. Server-side
+  `.Transport` support was extended so a host key carrying a certificate is
+  actually advertised and exchanged as a certificate algorithm, and
+  `.PKey.from_public_key_file` was added for loading CA public keys.
 - :release:`5.1.0 <2026-10-17>`
 - :release:`5.0.1 <2026-10-17>`
 - :bug:`2462` (w/ earlier fix attempts :issue:`2475` and :issue:`2465`) An API

@@ -794,6 +794,22 @@ class Transport(threading.Thread, ClosingContextManager):
         if isinstance(key, RSAKey):
             self.server_key_dict["rsa-sha2-256"] = key
             self.server_key_dict["rsa-sha2-512"] = key
+        # If a host certificate is attached, also offer (and be selectable
+        # for) the corresponding certificate algorithm, so key exchange can
+        # present the certificate rather than only the bare public key.
+        public_blob = getattr(key, "public_blob", None)
+        if public_blob is not None and public_blob.key_type.endswith(
+            "-cert-v01@openssh.com"
+        ):
+            cert_algorithm = public_blob.key_type
+            self.server_key_dict[cert_algorithm] = key
+            if isinstance(key, RSAKey):
+                # RSA host certs are negotiated using the rsa-sha2 cert
+                # algorithm names rather than the legacy ssh-rsa one.
+                for prefix in ("rsa-sha2-256", "rsa-sha2-512"):
+                    self.server_key_dict[
+                        "{}-cert-v01@openssh.com".format(prefix)
+                    ] = key
 
     def get_server_key(self):
         """
@@ -815,6 +831,21 @@ class Transport(threading.Thread, ClosingContextManager):
         except KeyError:
             pass
         return None
+
+    def get_server_key_blob(self):
+        """
+        Return the on-the-wire host-key blob for the currently negotiated key.
+
+        Prefers `.PKey.host_key_blob` so a server key carrying a host
+        certificate advertises the certificate rather than its bare public
+        key. Falls back to ``asbytes`` for key-like objects that do not
+        implement the cert-aware accessor.
+        """
+        key = self.get_server_key()
+        host_key_blob = getattr(key, "host_key_blob", None)
+        if host_key_blob is not None:
+            return host_key_blob()
+        return key.asbytes()
 
     @staticmethod
     def load_server_moduli(filename=None):

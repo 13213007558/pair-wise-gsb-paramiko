@@ -225,6 +225,34 @@ class PKey:
         return key
 
     @staticmethod
+    def from_public_key_file(path):
+        """
+        Load a public key from an OpenSSH ``.pub`` (``<type> <base64>``) file.
+
+        Unlike `.from_path`, this expects a *public* key and never touches
+        private material, which makes it suitable for loading trust anchors
+        such as host certificate authority public keys.
+
+        :param str path: path to the ``.pub`` file.
+        :returns: a public-only `.PKey` subclass instance.
+        :raises `.UnknownKeyType`: if the key type is not supported.
+        :raises `.SSHException`: if the file does not contain a public key.
+
+        .. versionadded:: 5.2
+        """
+        from base64 import decodebytes
+
+        path = Path(path).expanduser()
+        line = path.read_text().strip()
+        fields = line.split()
+        if len(fields) < 2:
+            raise SSHException(
+                "Not a valid OpenSSH public key file: {!r}".format(str(path))
+            )
+        key_type, key_b64 = fields[0], fields[1]
+        return PKey.from_type_string(key_type, decodebytes(b(key_b64)))
+
+    @staticmethod
     def from_type_string(
         key_type: str, key_bytes: bytes, password: Optional[str] = None
     ):
@@ -315,6 +343,22 @@ class PKey:
         re-create the key object later.
         """
         return bytes()
+
+    def host_key_blob(self):
+        """
+        Return the on-the-wire host-key blob to advertise for this key.
+
+        Regular keys return the same thing as `.asbytes`. When the key has a
+        host certificate attached via `.load_certificate`, the certificate's
+        own network representation (its ``public_blob``) is returned instead,
+        which is exactly what an SSH server must place in its key-exchange
+        reply. This keeps certificate handling out of every individual key
+        class's `.asbytes` implementation.
+        """
+        public_blob = getattr(self, "public_blob", None)
+        if public_blob is not None:
+            return public_blob.key_blob
+        return self.asbytes()
 
     def __bytes__(self):
         return self.asbytes()

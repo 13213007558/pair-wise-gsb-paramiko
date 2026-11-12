@@ -233,6 +233,7 @@ class SSHClient(ClosingContextManager):
         disabled_algorithms=None,
         transport_factory=None,
         auth_strategy=None,
+        host_certificate_verifier=None,
     ):
         """
         Connect to an SSH server and authenticate to it.  The server's host key
@@ -315,6 +316,20 @@ class SSHClient(ClosingContextManager):
                 authentication-related parameters (such as, but not limited to,
                 ``password``, ``key_filename`` and ``allow_agent``) and will
                 trigger an exception if given alongside them.
+
+        :param host_certificate_verifier:
+            an optional `.HostCertificateVerifier` enabling explicit OpenSSH
+            **host certificate** verification. When supplied, the server must
+            present a host certificate that is signed by one of the configured
+            `.HostCertificateAuthority` objects, is of host type, names the
+            connected host among its principals, is currently valid, and
+            carries no unrecognized critical options. The check runs after the
+            transport handshake signature is validated but before any user
+            authentication material is sent, and a failure raises a
+            `.HostCertificateError` subclass. When ``None`` (the default),
+            only the classic bare-key ``known_hosts`` / missing-host-key
+            policy behavior applies. Note that user certificates loaded for
+            client authentication never establish host trust.
 
         :returns:
             `.AuthResult` if ``auth_strategy`` is non-``None``; otherwise,
@@ -443,7 +458,20 @@ class SSHClient(ClosingContextManager):
         t.start_client(timeout=timeout)
 
         server_key = t.get_remote_server_key()
-        if our_server_keys is None:
+        # Explicit host-certificate verification takes precedence over, and is
+        # mutually exclusive with, the bare-key known_hosts / policy flow: a
+        # verifier expresses its own complete trust model (CA + host range).
+        if host_certificate_verifier is not None:
+            host_certificate_verifier.verify_server_key(
+                server_key,
+                hostname=server_hostkey_name,
+                # The raw name (never the [host]:port composite) is what host
+                # ranges are matched against; port is supplied on its own so a
+                # port-scoped CA cannot be bypassed via an alias.
+                raw_hostname=hostname,
+                port=port,
+            )
+        elif our_server_keys is None:
             # will raise exception if the key is rejected
             self._policy.missing_host_key(
                 self, server_hostkey_name, server_key

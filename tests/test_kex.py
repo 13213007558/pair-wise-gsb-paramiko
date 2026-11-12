@@ -125,6 +125,13 @@ class FakeTransport:
     def get_server_key(self):
         return FakeKey()
 
+    def get_server_key_blob(self):
+        key = self.get_server_key()
+        host_key_blob = getattr(key, "host_key_blob", None)
+        if host_key_blob is not None:
+            return host_key_blob()
+        return key.asbytes()
+
     def _get_modulus_pack(self):
         return FakeModulusPack()
 

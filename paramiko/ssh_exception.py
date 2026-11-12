@@ -140,6 +140,70 @@ class BadHostKeyException(SSHException):
         )
 
 
+class HostCertificateError(SSHException):
+    """
+    Base class for failures while verifying an OpenSSH host certificate.
+
+    The concrete subclasses distinguish the *kind* of problem encountered so
+    callers can react programmatically and so log messages clearly identify
+    whether the issue was one of trust, naming, validity, or a bad signature.
+
+    .. versionadded:: 5.2
+    """
+
+
+class HostCertificateTrustError(HostCertificateError):
+    """
+    The host certificate could not be anchored to a configured trust anchor.
+
+    Raised when no configured `.HostCertificateAuthority` vouches for the
+    presented certificate: either none claimed the connected host, or none of
+    the claiming CAs produced a valid signature over the certificate. A
+    certificate's embedded signing key is never treated as a trust anchor on
+    its own.
+
+    .. versionadded:: 5.2
+    """
+
+
+class HostCertificateNameError(HostCertificateError):
+    """
+    The certificate's principals do not match the host being connected to.
+
+    Raised when the certificate is not a host certificate, or none of its
+    ``valid principals`` match the name used for host-key verification (the
+    configured host range is also enforced before this check).
+
+    .. versionadded:: 5.2
+    """
+
+
+class HostCertificateValidityError(HostCertificateError):
+    """
+    The host certificate is outside its validity window.
+
+    Raised when the current time is earlier than the certificate's
+    ``valid after`` timestamp or later than/equal to its ``valid before``
+    timestamp.
+
+    .. versionadded:: 5.2
+    """
+
+
+class HostCertificateSignatureError(HostCertificateError):
+    """
+    A cryptographic signature related to the host certificate did not verify.
+
+    Raised when the CA signature over the certificate does not verify, or when
+    the certificate carries an unrecognized critical option (which, per the
+    OpenSSH certificate specification, must cause the certificate to be
+    rejected). Failures of the SSH handshake signature itself are raised here
+    as well when explicitly re-checked.
+
+    .. versionadded:: 5.2
+    """
+
+
 class IncompatiblePeer(SSHException):
     """
     A disagreement arose regarding an algorithm required for key exchange.
